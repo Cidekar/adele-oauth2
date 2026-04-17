@@ -171,7 +171,7 @@ release\:verify:
 	@echo "  The next OAuth2 package release will be tagged: $(PACKAGE_PUBLICATION_TAG_NEXT)"
 	@echo ""
 
-	if [[ $$PACKAGE_PUBLICATION_TAG_NEXT =~ (v[0-9].[0-9].[0-9])$$ ]]; then \
+	if [[ $$PACKAGE_PUBLICATION_TAG_NEXT =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$$ ]]; then \
 		echo "" ; \
 	else \
 		echo "  Error: tag does not follow semantic versioning format (vMAJOR.MINOR.PATCH)." ; \
