@@ -3,7 +3,6 @@ package api
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"log"
 	"net/http"
 	"slices"
@@ -24,7 +23,8 @@ func BearerTokenHandler(unguardedRoute []string, GuardedRouteGroups []string, Er
 		fn := func(w http.ResponseWriter, r *http.Request) {
 
 			if len(GuardedRouteGroups) == 0 {
-				panic("no guarded routes were specified in the oauth config")
+				http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+				return
 			}
 
 			if !isProtectedBaseRoute(r.URL.Path, GuardedRouteGroups) {
@@ -32,7 +32,6 @@ func BearerTokenHandler(unguardedRoute []string, GuardedRouteGroups []string, Er
 				return
 			}
 
-			fmt.Println(1)
 			unguarded := false
 			for _, route := range unguardedRoute {
 				if r.URL.Path == route {
@@ -41,22 +40,10 @@ func BearerTokenHandler(unguardedRoute []string, GuardedRouteGroups []string, Er
 				}
 			}
 
-			fmt.Println(2)
 			if unguarded {
 				next.ServeHTTP(w, r)
 				return
 			}
-
-			fmt.Println(3)
-
-			header := r.Header.Get("Accept")
-			if header != "application/json" {
-				fmt.Println("oops")
-				http.Redirect(w, r, "/", http.StatusSeeOther)
-				return
-			}
-
-			fmt.Println(4)
 
 			ok, token, err := o.AuthenticateToken(r)
 			if err != nil {
@@ -68,7 +55,6 @@ func BearerTokenHandler(unguardedRoute []string, GuardedRouteGroups []string, Er
 				return
 			}
 
-			fmt.Println(5)
 			if !ok {
 				err := writeJSON(w, StatusCodes[ErrInvalidClient], Descriptions[ErrInvalidClient])
 				if err != nil {
@@ -104,11 +90,11 @@ func writeJSON(w http.ResponseWriter, status int, data interface{}) error {
 // check if the path is part of a protected route group set in the configuration
 func isProtectedBaseRoute(path string, groups []string) bool {
 	for _, route := range groups {
-		if !strings.Contains(path, route) {
-			return false
+		if strings.Contains(path, route) {
+			return true
 		}
 	}
-	return true
+	return false
 }
 
 // look up the scopes assigned to the current route and confirm the access token passed in the http request has the same scopes assigned to the token.

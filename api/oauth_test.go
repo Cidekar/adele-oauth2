@@ -177,8 +177,8 @@ func TestOauth_Oauth_Authorization_Grant_Exchange_Post(t *testing.T) {
 		t.Error("authorization grant exchange returned unexpected type")
 	}
 
-	if at.GrantType != "authorization_grant_verify" {
-		t.Errorf("authorization grant exchange returned %s, but expectedauthorization_grant_verify", at.GrantType)
+	if at.GrantType != "verify" {
+		t.Errorf("authorization grant exchange returned %s, but expected verify", at.GrantType)
 	}
 
 	// authorization_grant_pkce
@@ -227,6 +227,22 @@ func TestOauth_Oauth_Authorization_Grant_Exchange_Post(t *testing.T) {
 
 	if reflect.TypeOf(at).String() != "*api.AuthorizationResponse" {
 		t.Error("authorization grant exchange returned unexpected type")
+	}
+
+	// Bug fix: mismatched redirect_uri must return ErrInvalidRedirectURI.
+	qp.Set("client_id", "1")
+	qp.Set("redirect_uri", "https://evil.example.com/callback")
+	url = o.Config.GuardedRouteGroups[0] + "?" + qp.Encode()
+	req = httptest.NewRequest("GET", url, nil)
+	ctx, err = o.Session.Load(req.Context(), req.Header.Get("X-Session"))
+	if err != nil {
+		panic(err)
+	}
+	o.Session.Put(ctx, "userID", "1")
+	req = req.WithContext(ctx)
+	_, errRes = o.AuthorizationGrantExchangePost(httptest.NewRecorder(), req)
+	if errRes == nil || errRes.Error != ErrInvalidRedirectURI.Error() {
+		t.Errorf("mismatched redirect_uri: expected %q, got %v", ErrInvalidRedirectURI.Error(), errRes)
 	}
 
 }
@@ -357,7 +373,7 @@ func TestOauth_Oauth_Access_Token_Grant_Exchange(t *testing.T) {
 	_, err := collection.Insert(Client{
 		Secret: secret,
 		Name:   "Adele",
-		Type:   "resource_owner_password_credentials",
+		Type:   "password",
 		UserID: &user.ID,
 	})
 	if err != nil {
@@ -372,7 +388,7 @@ func TestOauth_Oauth_Access_Token_Grant_Exchange(t *testing.T) {
 	// Setup the request parameters
 	qp.Set("client_id", "4")
 	qp.Set("client_secret", secret)
-	qp.Set("grant_type", "resource_owner_password_credentials")
+	qp.Set("grant_type", "password")
 	qp.Set("scopes", "ping pong")
 	qp.Set("username", "adele@localhost.net")
 	qp.Set("password", "Password")
@@ -442,6 +458,20 @@ func TestOauth_Oauth_Access_Token_Grant_Exchange(t *testing.T) {
 		t.Error("access token grant exchange returned a refresh token and it should not")
 	}
 
+	// Bug fix: ExpiresIn must be a sane seconds value, not nanoseconds.
+	if res.ExpiresIn <= 0 || res.ExpiresIn >= 48*3600 {
+		t.Errorf("client_credentials ExpiresIn out of sane range: got %d (expected 0 < x < %d)", res.ExpiresIn, 48*3600)
+	}
+
+	// Bug fix: unsupported grant type returns ErrUnsupportedGrantType, not ErrUnauthorizedClient.
+	qp.Set("grant_type", "totally_bogus")
+	url = o.Config.GuardedRouteGroups[0] + "?" + qp.Encode()
+	req = httptest.NewRequest("GET", url, nil)
+	_, errRes = o.AccessTokenGrantExchange(httptest.NewRecorder(), req)
+	if errRes == nil || errRes.Error != ErrUnsupportedGrantType.Error() {
+		t.Errorf("bogus grant_type: expected error %q, got %v", ErrUnsupportedGrantType.Error(), errRes)
+	}
+
 }
 
 func TestOauth_Oauth_Refresh_Token_Exchange(t *testing.T) {
@@ -488,7 +518,8 @@ func TestOauth_Oauth_Refresh_Token_Exchange(t *testing.T) {
 	_, err := collection.Insert(Client{
 		Secret: secret,
 		Name:   "Adele",
-		Type:   "authorization_grant",
+		Type:   "authorization_code",
+		Flow:   "plain",
 		UserID: &user.ID,
 	})
 	if err != nil {
@@ -553,11 +584,36 @@ func TestOauth_Oauth_Refresh_Token_Exchange(t *testing.T) {
 		t.Error("access token grant exchange returned a refresh token and it should not")
 	}
 
+	// Bug fix: RefreshTokenExchange must return grant_type "refresh_token".
+	if res.GrantType != "refresh_token" {
+		t.Errorf("refresh token exchange GrantType: got %q, want %q", res.GrantType, "refresh_token")
+	}
+
+}
+
+// TestOauth_Config_Defaults verifies that setConfigDefaults fills in sane
+// Duration values (not raw nanosecond integers) when Configuration is empty.
+func TestOauth_Config_Defaults(t *testing.T) {
+	o := Service{}
+	setConfigDefaults(&o)
+
+	if o.Config.AuthorizationTokenTTL != 60*time.Minute {
+		t.Errorf("AuthorizationTokenTTL: got %v, want %v", o.Config.AuthorizationTokenTTL, 60*time.Minute)
+	}
+	if o.Config.OauthTokenTTL != 24*time.Hour {
+		t.Errorf("OauthTokenTTL: got %v, want %v", o.Config.OauthTokenTTL, 24*time.Hour)
+	}
+	if o.Config.RefreshTokenTokenTTL != 24*time.Hour {
+		t.Errorf("RefreshTokenTokenTTL: got %v, want %v", o.Config.RefreshTokenTokenTTL, 24*time.Hour)
+	}
+	if o.Config.PkceImplicitTTL != 300*time.Second {
+		t.Errorf("PkceImplicitTTL: got %v, want %v", o.Config.PkceImplicitTTL, 300*time.Second)
+	}
 }
 
 func setupOauthMTest(_ adele.Adele) {
 	// Run migrations via raw SQL
-	upBytes, err := templateFS.ReadFile("testmigrations/oauth_test_postgres.sql")
+	upBytes, err := testTemplateFS.ReadFile("testmigrations/oauth_test_postgres.sql")
 	if err != nil {
 		panic(err)
 	}
@@ -585,7 +641,8 @@ func setupOauthMTest(_ adele.Adele) {
 	_, err = collection.Insert(Client{
 		Secret:      generateClientSecret(),
 		Name:        "Adele",
-		Type:        "authorization_grant_pkce",
+		Type:        "authorization_code",
+		Flow:        "pkce",
 		RedirectUrl: "https://localhost/callback",
 	})
 	if err != nil {
@@ -595,7 +652,8 @@ func setupOauthMTest(_ adele.Adele) {
 	_, err = collection.Insert(Client{
 		Secret:      generateClientSecret(),
 		Name:        "Adele",
-		Type:        "authorization_grant_pkce_implicit",
+		Type:        "authorization_code",
+		Flow:        "pkce_implicit",
 		RedirectUrl: "https://localhost/callback",
 	})
 	if err != nil {
@@ -606,7 +664,8 @@ func setupOauthMTest(_ adele.Adele) {
 	_, err = collection.Insert(Client{
 		Secret:      generateClientSecret(),
 		Name:        "Adele",
-		Type:        "authorization_grant",
+		Type:        "authorization_code",
+		Flow:        "plain",
 		RedirectUrl: "https://localhost/callback",
 	})
 	if err != nil {

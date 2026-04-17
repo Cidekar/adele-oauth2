@@ -13,6 +13,28 @@ import (
 	"golang.org/x/crypto/bcrypt"
 )
 
+// InsertClient hashes the client secret with bcrypt and persists the client to
+// the database. The plaintext secret is available in the returned Client's
+// PlainText field — it is shown to the caller once and never stored.
+func (o *Service) InsertClient(client Client) (*Client, error) {
+	plainSecret := client.Secret
+	hashedSecret, err := bcrypt.GenerateFromPassword([]byte(plainSecret), bcrypt.DefaultCost)
+	if err != nil {
+		return nil, err
+	}
+	client.Secret = string(hashedSecret)
+
+	collection := DB.Collection("oauth_clients")
+	res, err := collection.Insert(client)
+	if err != nil {
+		return nil, err
+	}
+
+	client.ID = int(res.ID().(int64))
+	client.PlainText = plainSecret
+	return &client, nil
+}
+
 // Get the client by the ID and if no client is found the return value will be nil.
 func (o *Service) GetClient(id int) (*Client, error) {
 	var client Client
@@ -53,7 +75,6 @@ func (o *Service) AuthorizationClientExchange(w http.ResponseWriter, r *http.Req
 
 	err := r.ParseForm()
 	if err != nil {
-		fmt.Println(22)
 		return nil, NewErrorResponse(ErrServerError)
 	}
 
@@ -69,7 +90,6 @@ func (o *Service) AuthorizationClientExchange(w http.ResponseWriter, r *http.Req
 		for _, field := range requiredFields {
 			exist := r.Form.Get(field)
 			if exist == "" {
-				fmt.Println(12)
 				return nil, NewErrorResponse(ErrInvalidRequest)
 			}
 		}
@@ -79,7 +99,6 @@ func (o *Service) AuthorizationClientExchange(w http.ResponseWriter, r *http.Req
 			formField := r.Form.Get(field)
 			if strings.TrimSpace(formField) == "" {
 				if len(formField) > 0 {
-					fmt.Println(13)
 					return nil, NewErrorResponse(ErrInvalidRequest)
 				}
 			}
@@ -123,7 +142,6 @@ func (o *Service) AuthorizationClientExchange(w http.ResponseWriter, r *http.Req
 		user := o.GetAuthenticatedUser(r)
 		token, err := o.GenerateAuthorizationToken()
 		if err != nil {
-			fmt.Println(23)
 			return nil, NewErrorResponse(ErrServerError)
 		}
 		token.State = r.Form.Get("state")
@@ -131,12 +149,11 @@ func (o *Service) AuthorizationClientExchange(w http.ResponseWriter, r *http.Req
 		token.ClientID = client.ID
 		statefulToken, err := o.InsertAuthorizationToken(token)
 		if err != nil {
-			fmt.Println(24)
 			return nil, NewErrorResponse(ErrServerError)
 		}
 
 		redirect := AuthorizationResponse{
-			GrantType: "authorization_grant_pkce",
+			GrantType: FlowPKCE,
 			RedirectUri: RedirectUri{
 				Path:  client.RedirectUrl,
 				Query: fmt.Sprintf("code=%s&state=%s", statefulToken.PlainText, r.Form.Get("state")),
@@ -163,7 +180,7 @@ func (o *Service) AuthorizationClientExchange(w http.ResponseWriter, r *http.Req
 	o.Renderer.Page(w, r, o.Config.VerifyTemplatePath, vars, nil)
 
 	return &AuthorizationResponse{
-		GrantType: "authorization_grant_verify",
+		GrantType: FlowVerify,
 	}, nil
 
 }
@@ -172,7 +189,6 @@ func (o *Service) AuthorizationClientCodeExchange(w http.ResponseWriter, r *http
 
 	err := r.ParseForm()
 	if err != nil {
-		fmt.Println(22)
 		return nil, NewErrorResponse(ErrServerError)
 	}
 
@@ -188,7 +204,6 @@ func (o *Service) AuthorizationClientCodeExchange(w http.ResponseWriter, r *http
 		for _, field := range requiredFields {
 			exist := r.Form.Get(field)
 			if exist == "" {
-				fmt.Println(12)
 				return nil, NewErrorResponse(ErrAccessDenied)
 			}
 		}
@@ -198,7 +213,6 @@ func (o *Service) AuthorizationClientCodeExchange(w http.ResponseWriter, r *http
 			formField := r.Form.Get(field)
 			if strings.TrimSpace(formField) == "" {
 				if len(formField) > 0 {
-					fmt.Println(13)
 					return nil, NewErrorResponse(ErrAccessDenied)
 				}
 			}
@@ -241,7 +255,6 @@ func (o *Service) AuthorizationClientCodeExchange(w http.ResponseWriter, r *http
 		user := o.GetAuthenticatedUser(r)
 		token, err := o.GenerateAuthorizationToken()
 		if err != nil {
-			fmt.Println(23)
 			return nil, NewErrorResponse(ErrServerError)
 		}
 
@@ -252,12 +265,11 @@ func (o *Service) AuthorizationClientCodeExchange(w http.ResponseWriter, r *http
 		token.ClientID = client.ID
 		statefulToken, err := o.InsertAuthorizationToken(token)
 		if err != nil {
-			fmt.Println(24)
 			return nil, NewErrorResponse(ErrServerError)
 		}
 
 		redirect := AuthorizationResponse{
-			GrantType: "authorization_grant_pkce",
+			GrantType: FlowPKCE,
 			RedirectUri: RedirectUri{
 				Path:  client.RedirectUrl,
 				Query: fmt.Sprintf("code=%s&state=%s", statefulToken.PlainText, r.Form.Get("state")),
@@ -284,20 +296,18 @@ func (o *Service) AuthorizationClientCodeExchange(w http.ResponseWriter, r *http
 	o.Renderer.Page(w, r, o.Config.VerifyTemplatePath, vars, nil)
 
 	return &AuthorizationResponse{
-		GrantType: "authorization_grant_verify",
+		GrantType: FlowVerify,
 	}, nil
 }
 
 func (o *Service) AuthorizationClientCodeExchangeImplicit(w http.ResponseWriter, r *http.Request, client *Client) (*AuthorizationResponse, *ErrorResponse) {
 	err := r.ParseForm()
 	if err != nil {
-		fmt.Println(40)
 		return nil, NewErrorResponse(ErrServerError)
 	}
 
 	token, err := o.GenerateAuthorizationToken()
 	if err != nil {
-		fmt.Println(41)
 		return nil, NewErrorResponse(ErrServerError)
 	}
 
@@ -307,18 +317,16 @@ func (o *Service) AuthorizationClientCodeExchangeImplicit(w http.ResponseWriter,
 	token.ClientID = client.ID
 	statefulToken, err := o.InsertAuthorizationToken(token)
 	if err != nil {
-		fmt.Println(42)
 		return nil, NewErrorResponse(ErrServerError)
 	}
 
 	params, err := url.ParseQuery(r.URL.RawQuery)
 	if err != nil {
-		fmt.Println(43)
 		return nil, NewErrorResponse(ErrServerError)
 	}
 
 	res := &AuthorizationResponse{
-		GrantType: "authorization_grant_pkce_implicit",
+		GrantType: FlowPKCEImplicit,
 		TokenType: "code",
 		Code:      statefulToken.PlainText,
 		State:     params.Get("state"),
@@ -331,7 +339,6 @@ func (o *Service) ResourceOwnerTokenExchange(r *http.Request, w http.ResponseWri
 
 	err := r.ParseForm()
 	if err != nil {
-		fmt.Println(22)
 		return nil, nil, NewErrorResponse(ErrServerError)
 	}
 
@@ -343,7 +350,6 @@ func (o *Service) ResourceOwnerTokenExchange(r *http.Request, w http.ResponseWri
 	// required
 	for _, field := range requiredFields {
 		if !r.Form.Has(field) {
-			fmt.Println(121)
 			return nil, nil, NewErrorResponse(ErrInvalidRequest)
 		}
 	}
@@ -357,7 +363,6 @@ func (o *Service) ResourceOwnerTokenExchange(r *http.Request, w http.ResponseWri
 		formField := r.Form.Get(field)
 		if strings.TrimSpace(formField) == "" {
 			if len(formField) > 0 {
-				fmt.Println(13)
 				return nil, nil, NewErrorResponse(ErrInvalidRequest)
 			}
 		}
@@ -392,7 +397,6 @@ func (o *Service) ResourceOwnerTokenExchange(r *http.Request, w http.ResponseWri
 
 	ok = o.scopesCanBeIssued(f)
 	if !ok {
-		fmt.Println(76)
 		return nil, nil, NewErrorResponse(ErrInvalidScope)
 	}
 

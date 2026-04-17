@@ -17,7 +17,7 @@ import (
 // Create a oauth token that is always the same length each time one is generated.
 func (o *Service) GenerateOauthToken() (*OauthToken, error) {
 	token := &OauthToken{
-		Expires: time.Now().UTC().Add(o.Config.OauthTokenTTL * time.Hour),
+		Expires: time.Now().UTC().Add(o.Config.OauthTokenTTL),
 	}
 
 	randomBytes := make([]byte, 16)
@@ -41,7 +41,11 @@ func (o *Service) InsertOauthToken(token *OauthToken) (*OauthToken, error) {
 	token.CreatedAt = time.Now()
 	token.UpdatedAt = time.Now()
 
+	// Do not persist plaintext to DB; keep it in-memory for the HTTP response.
+	plain := token.PlainText
+	token.PlainText = ""
 	res, err := collection.Insert(token)
+	token.PlainText = plain
 	if err != nil {
 		return nil, err
 	}
@@ -95,14 +99,15 @@ func (o *Service) AuthenticateToken(r *http.Request) (bool, *OauthToken, error) 
 	return true, token, nil
 }
 
-// get the token from the db by the plain text value
+// get the token from the db by hashing the plain text value and querying token_hash
 func (o *Service) GetByToken(plainText string) (*OauthToken, error) {
 
 	collection := DB.Collection("tokens")
 
 	var token OauthToken
 
-	res := collection.Find(up.Cond{"token": plainText})
+	hash := sha256.Sum256([]byte(plainText))
+	res := collection.Find(up.Cond{"token_hash": hash[:]})
 	err := res.One(&token)
 	if err != nil {
 		return nil, err
@@ -118,7 +123,7 @@ func (o *Service) GetAuthTokenFromHeader(r *http.Request) (*OauthToken, error) {
 	}
 
 	headerParts := strings.Split(authorizationHeader, " ")
-	if len(headerParts) != 2 || headerParts[0] != "Bearer" {
+	if len(headerParts) != 2 || !strings.EqualFold(headerParts[0], "Bearer") {
 		return nil, errors.New("invalid authorization header received")
 	}
 

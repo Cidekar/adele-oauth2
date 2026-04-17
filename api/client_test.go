@@ -111,8 +111,8 @@ func TestOauth_Client(t *testing.T) {
 		t.Error("authorization client exchange returned error when it should not")
 	}
 
-	if ar.GrantType != "authorization_grant_verify" {
-		t.Errorf("authorization client exchange returned %s when it should be authorization_grant_verify", ar.GrantType)
+	if ar.GrantType != "verify" {
+		t.Errorf("authorization client exchange returned %s when it should be verify", ar.GrantType)
 	}
 
 	// authenticated users get redirect after permission
@@ -140,8 +140,8 @@ func TestOauth_Client(t *testing.T) {
 		t.Error("authorization client exchange returned error when it should not")
 	}
 
-	if ar.GrantType != "authorization_grant_pkce" {
-		t.Errorf("authorization client exchange returned %s when it should be authorization_grant_verify", ar.GrantType)
+	if ar.GrantType != "pkce" {
+		t.Errorf("authorization client exchange returned %s when it should be pkce", ar.GrantType)
 	}
 
 	if ar.RedirectUri.Path != "https://localhost/callback" {
@@ -199,8 +199,8 @@ func TestOauth_Client(t *testing.T) {
 		t.Error("authorization client exchange returned error when it should not")
 	}
 
-	if ar.GrantType != "authorization_grant_pkce" {
-		t.Errorf("authorization client exchange returned %s when it should be authorization_grant_pkce", ar.GrantType)
+	if ar.GrantType != "pkce" {
+		t.Errorf("authorization client exchange returned %s when it should be pkce", ar.GrantType)
 	}
 
 	// authenticated users get redirect after permission
@@ -230,8 +230,8 @@ func TestOauth_Client(t *testing.T) {
 		t.Error("authorization client exchange returned error when it should not")
 	}
 
-	if ar.GrantType != "authorization_grant_pkce" {
-		t.Errorf("authorization client exchange returned %s when it should be authorization_grant_verify", ar.GrantType)
+	if ar.GrantType != "pkce" {
+		t.Errorf("authorization client exchange returned %s when it should be pkce", ar.GrantType)
 	}
 
 	if ar.RedirectUri.Path != "https://localhost/callback" {
@@ -258,8 +258,8 @@ func TestOauth_Client(t *testing.T) {
 		t.Error("authorization client code exchange returned error when it should not")
 	}
 
-	if ar.GrantType != "authorization_grant_pkce_implicit" {
-		t.Errorf("authorization client code exchange returned %s when it should be authorization_grant_verify", ar.GrantType)
+	if ar.GrantType != "pkce_implicit" {
+		t.Errorf("authorization client code exchange returned %s when it should be pkce_implicit", ar.GrantType)
 	}
 
 	if ar.TokenType != "code" {
@@ -358,7 +358,7 @@ func TestOauth_Client_Resource_Owner_Password_Credentials(t *testing.T) {
 
 func setupClientTest(_ adele.Adele) {
 	// Run migrations via raw SQL
-	upBytes, err := templateFS.ReadFile("testmigrations/oauth_test_postgres.sql")
+	upBytes, err := testTemplateFS.ReadFile("testmigrations/oauth_test_postgres.sql")
 	if err != nil {
 		panic(err)
 	}
@@ -401,7 +401,7 @@ func setupClientTest(_ adele.Adele) {
 	_, err = collection.Insert(Client{
 		Secret: generateClientSecret(),
 		Name:   "Adele",
-		Type:   "resource_owner_client_credentials",
+		Type:   "password",
 	})
 	if err != nil {
 		panic(err)
@@ -410,7 +410,8 @@ func setupClientTest(_ adele.Adele) {
 	_, err = collection.Insert(Client{
 		Secret:      generateClientSecret(),
 		Name:        "Adele",
-		Type:        "authorization_grant",
+		Type:        "authorization_code",
+		Flow:        "plain",
 		RedirectUrl: "https://localhost/callback",
 	})
 	if err != nil {
@@ -420,7 +421,8 @@ func setupClientTest(_ adele.Adele) {
 	_, err = collection.Insert(Client{
 		Secret:      generateClientSecret(),
 		Name:        "Adele",
-		Type:        "authorization_grant_pkce",
+		Type:        "authorization_code",
+		Flow:        "pkce",
 		RedirectUrl: "https://localhost/callback",
 	})
 	if err != nil {
@@ -430,7 +432,8 @@ func setupClientTest(_ adele.Adele) {
 	_, err = collection.Insert(Client{
 		Secret:      generateClientSecret(),
 		Name:        "Adele",
-		Type:        "authorization_grant_pkce_implicit",
+		Type:        "authorization_code",
+		Flow:        "pkce_implicit",
 		RedirectUrl: "https://localhost/callback",
 	})
 	if err != nil {

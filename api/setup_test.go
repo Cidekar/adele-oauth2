@@ -20,7 +20,7 @@ import (
 // go test . --run TestOauth_ChallengeCodeValidate
 
 //go:embed testmigrations
-var templateFS embed.FS
+var testTemplateFS embed.FS
 
 var (
 	ade                    adele.Adele

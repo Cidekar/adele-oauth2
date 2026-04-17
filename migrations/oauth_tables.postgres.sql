@@ -34,7 +34,7 @@ CREATE TABLE tokens (
     user_id integer REFERENCES users (id) ON DELETE CASCADE ON UPDATE CASCADE,
     client_id integer REFERENCES oauth_clients (id) ON DELETE CASCADE ON UPDATE CASCADE,
     scopes TEXT DEFAULT '',
-    token character varying(255) NOT NULL,
+    -- token plaintext removed; lookup by token_hash
     created_at timestamp without time zone NOT NULL DEFAULT now(),
     updated_at timestamp without time zone NOT NULL DEFAULT now(),
     token_hash bytea NOT NULL,
@@ -50,7 +50,7 @@ drop table if exists refresh_tokens cascade;
 CREATE TABLE refresh_tokens (
     id SERIAL PRIMARY KEY,
     access_token_id integer REFERENCES tokens (id) ON DELETE CASCADE ON UPDATE CASCADE,
-    token character varying(255) NOT NULL,
+    -- token plaintext removed; lookup by token_hash
     expiry timestamp without time zone NOT NULL,
     token_hash bytea NOT NULL,
     created_at timestamp without time zone NOT NULL DEFAULT now(),
@@ -67,7 +67,7 @@ CREATE TABLE authorization_tokens (
     id SERIAL PRIMARY KEY,
     user_id integer REFERENCES users (id) ON DELETE CASCADE ON UPDATE CASCADE,
     client_id integer REFERENCES oauth_clients (id) ON DELETE CASCADE ON UPDATE CASCADE,
-    token character varying(255) NOT NULL,
+    -- token plaintext removed; lookup by token_hash
     token_hash bytea NOT NULL,
     expiry timestamp without time zone NOT NULL,
     challenge_code TEXT DEFAULT '',

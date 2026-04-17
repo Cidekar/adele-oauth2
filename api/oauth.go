@@ -1,8 +1,14 @@
 package api
 
 import (
+	"crypto/rand"
+	"crypto/subtle"
+	"embed"
+	"encoding/base64"
+	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"os"
 	"slices"
 	"strconv"
@@ -11,11 +17,41 @@ import (
 
 	"github.com/cidekar/adele-framework"
 	up "github.com/upper/db/v4"
+	"golang.org/x/crypto/bcrypt"
 	"gopkg.in/yaml.v2"
 )
 
+// Flow constants for authorization_code client sub-flows.
+const (
+	FlowPlain        = "plain"
+	FlowPKCE         = "pkce"
+	FlowPKCEImplicit = "pkce_implicit"
+	FlowVerify       = "verify"
+)
+
+//go:embed templates
+var templateFS embed.FS
+
 // DB is the database session used for OAuth2 operations.
 var DB up.Session
+
+// extractClientCredentials extracts client_id and client_secret from the request.
+// Checks Authorization: Basic header first (RFC 6749 §2.3.1), falls back to form body.
+func extractClientCredentials(r *http.Request) (string, string) {
+	if id, secret, ok := r.BasicAuth(); ok {
+		return id, secret
+	}
+	return r.FormValue("client_id"), r.FormValue("client_secret")
+}
+
+// authErrorRedirect redirects to the client's redirect URI with error and state params
+// per RFC 6749 §4.1.2.1. Used for authorization endpoint errors after client validation.
+func authErrorRedirect(w http.ResponseWriter, r *http.Request, redirectURI, state string, oauthErr error) {
+	q := url.Values{}
+	q.Set("error", oauthErr.Error())
+	q.Set("state", state)
+	http.Redirect(w, r, redirectURI+"?"+q.Encode(), http.StatusFound)
+}
 
 // New creates a new Service instance with the given Adele application.
 // It initializes the database session and loads configuration from config/oauth.yml.
@@ -69,19 +105,19 @@ func newBase(a *adele.Adele) Service {
 func setConfigDefaults(o *Service) {
 	// set defaults for all token expiration windows
 	if o.Config.AuthorizationTokenTTL == 0 {
-		o.Config.AuthorizationTokenTTL = 60
+		o.Config.AuthorizationTokenTTL = 60 * time.Minute
 	}
 
-	if o.Config.OauthTokenTTL == (Service{}.Config.OauthTokenTTL) {
-		o.Config.OauthTokenTTL = 24
+	if o.Config.OauthTokenTTL == 0 {
+		o.Config.OauthTokenTTL = 24 * time.Hour
 	}
 
 	if o.Config.RefreshTokenTokenTTL == 0 {
-		o.Config.RefreshTokenTokenTTL = 24
+		o.Config.RefreshTokenTokenTTL = 24 * time.Hour
 	}
 
 	if o.Config.PkceImplicitTTL == 0 {
-		o.Config.PkceImplicitTTL = 300
+		o.Config.PkceImplicitTTL = 300 * time.Second
 	}
 
 	// Validate the scopes
@@ -110,6 +146,19 @@ func setConfigDefaults(o *Service) {
 }
 
 func loadConfig(a *adele.Adele) (*Configuration, error) {
+	// TODO: Move this into a command
+	// Check for the configuration file in on the current system and create if not found at /config/oauth.yaml
+	if _, err := os.Stat(a.RootPath + "/config/oauth.yml"); os.IsNotExist(err) {
+		data, err := templateFS.ReadFile("templates/oauth.yml")
+		if err != nil {
+			return nil, fmt.Errorf("failed to read package oauth config from embedded file system: %v", err)
+		}
+		err = os.WriteFile(a.RootPath+"/config/oauth.yml", data, 0644)
+		if err != nil {
+			return nil, fmt.Errorf("failed to write package oauth config to disk: %v", err)
+		}
+	}
+
 	// Read the configuration file
 	configFile, err := os.ReadFile(a.RootPath + "/config/oauth.yml")
 	if err != nil {
@@ -124,6 +173,28 @@ func loadConfig(a *adele.Adele) (*Configuration, error) {
 	}
 
 	return &config, nil
+}
+
+// validateClientWithSecret authenticates a client by ID and secret.
+// All code paths perform a bcrypt comparison to prevent timing-based enumeration.
+func (o *Service) validateClientWithSecret(cid int, clientSecret string) (*Client, *ErrorResponse) {
+	dummyHash := []byte("$2a$10$0000000000000000000000uGsOBFCBjMWmYFg0POnqGmGM.6FOrGK")
+
+	client, err := o.GetClient(cid)
+
+	// Always compare — real hash if client exists, dummy if not
+	secret := dummyHash
+	if client != nil && err == nil {
+		secret = []byte(client.Secret)
+	}
+	secretErr := bcrypt.CompareHashAndPassword(secret, []byte(clientSecret))
+
+	// Now evaluate all conditions uniformly
+	if client == nil || err != nil || secretErr != nil || client.Revoked != 0 {
+		return nil, NewErrorResponse(ErrInvalidClient)
+	}
+
+	return client, nil
 }
 
 // AuthorizationGrantExchange validates an authorization request and returns the redirect URI.
@@ -146,7 +217,6 @@ func loadConfig(a *adele.Adele) (*Configuration, error) {
 func (o *Service) AuthorizationGrantExchange(w http.ResponseWriter, r *http.Request) (*AuthorizationResponse, *ErrorResponse) {
 	err := r.ParseForm()
 	if err != nil {
-		fmt.Println(0)
 		return nil, NewErrorResponse(ErrInvalidRequest)
 	}
 
@@ -170,26 +240,20 @@ func (o *Service) AuthorizationGrantExchange(w http.ResponseWriter, r *http.Requ
 
 	// not empty
 	for _, field := range requiredFields {
-		formField := r.Form.Get(field)
-		if strings.TrimSpace(formField) == "" {
-			if len(formField) > 0 {
-				return nil, NewErrorResponse(ErrInvalidRequest)
-			}
+		if strings.TrimSpace(r.Form.Get(field)) == "" {
+			return nil, NewErrorResponse(ErrInvalidRequest)
 		}
 	}
 
 	if r.Form.Get("grant_type") != "authorization_code" {
-		fmt.Println(3)
 		return nil, NewErrorResponse(ErrUnsupportedGrantType)
 	}
 
 	if r.Form.Get("response_type") != "code" {
-		fmt.Println(4)
 		return nil, NewErrorResponse(ErrUnsupportedResponseType)
 	}
 
 	if r.Form.Get("state") == "" {
-		fmt.Println(5)
 		return nil, NewErrorResponse(ErrInvalidRequest)
 	}
 
@@ -197,68 +261,60 @@ func (o *Service) AuthorizationGrantExchange(w http.ResponseWriter, r *http.Requ
 	clientId := r.Form.Get("client_id")
 	cid, err := strconv.Atoi(clientId)
 	if err != nil {
-		fmt.Println(6)
 		return nil, NewErrorResponse(ErrInvalidClient)
 	}
 
 	client, err := o.GetClient(cid)
 	if client == nil {
-		fmt.Println(7)
 		return nil, NewErrorResponse(ErrInvalidClient)
 	}
 
 	if err != nil {
-		fmt.Println(8)
 		return nil, NewErrorResponse(ErrInvalidClient)
 	}
 
 	// client type supported by the method
-	var supportedClientTypes = []string{
-		"authorization_grant",
-		"authorization_grant_pkce",
+	if client.Type != "authorization_code" {
+		return nil, NewErrorResponse(ErrUnsupportedGrantType)
 	}
-
-	fmt.Println(client.Type)
-	ok := false
-	for _, t := range supportedClientTypes {
-		if t == client.Type {
-			ok = true
-			break
-		}
-	}
-	if !ok {
-		fmt.Println(85)
+	supportedFlows := []string{FlowPlain, FlowPKCE, FlowPKCEImplicit}
+	if !slices.Contains(supportedFlows, client.Flow) {
 		return nil, NewErrorResponse(ErrUnsupportedGrantType)
 	}
 
 	// validate the client redirect uri matches the requested redirect uri
-	ok = o.ValidateClientRedirect(r.Form.Get("redirect_uri"), client)
+	ok := o.ValidateClientRedirect(r.Form.Get("redirect_uri"), client)
 	if !ok {
-		fmt.Println(23)
 		return nil, NewErrorResponse(ErrInvalidRedirectURI)
 	}
 
 	// validate challenge method and code
 	_, err = ChallengeCodeValidate(r.Form.Get("code_challenge"), r.Form.Get("code_challenge_method"))
 	if err != nil {
-		fmt.Println(10)
-		return nil, NewErrorResponse(err)
+		authErrorRedirect(w, r, r.Form.Get("redirect_uri"), r.Form.Get("state"), err)
+		return nil, nil
 	}
 
 	// Validate the scopes
 	ok, _ = scopesValidate(r.Form.Get("scopes"))
 	if !ok {
-		fmt.Println(231)
-		return nil, NewErrorResponse(ErrInvalidScope)
+		authErrorRedirect(w, r, r.Form.Get("redirect_uri"), r.Form.Get("state"), ErrInvalidScope)
+		return nil, nil
 	}
 
 	f := scopesFormat(r.Form.Get("scopes"))
 
 	ok = o.scopesCanBeIssued(f)
 	if !ok {
-		fmt.Println(76)
-		return nil, NewErrorResponse(ErrInvalidScope)
+		authErrorRedirect(w, r, r.Form.Get("redirect_uri"), r.Form.Get("state"), ErrInvalidScope)
+		return nil, nil
 	}
+
+	// Generate CSRF token for the consent form
+	csrfBytes := make([]byte, 32)
+	rand.Read(csrfBytes)
+	csrfToken := base64.URLEncoding.EncodeToString(csrfBytes)
+	o.Session.Put(r.Context(), "oauth_csrf_token", csrfToken)
 
 	response := AuthorizationResponse{
 		RedirectUri: RedirectUri{
@@ -266,6 +322,7 @@ func (o *Service) AuthorizationGrantExchange(w http.ResponseWriter, r *http.Requ
 			Query: r.URL.RawQuery,
 			URI:   fmt.Sprintf("%s?%s", r.URL.Path, r.URL.RawQuery),
 		},
+		CSRFToken: csrfToken,
 	}
 
 	return &response, nil
@@ -289,13 +346,22 @@ func (o *Service) AuthorizationGrantExchange(w http.ResponseWriter, r *http.Requ
 func (o *Service) AuthorizationGrantExchangePost(w http.ResponseWriter, r *http.Request) (*AuthorizationResponse, *ErrorResponse) {
 	err := r.ParseForm()
 	if err != nil {
-		fmt.Println(0)
 		return nil, NewErrorResponse(ErrInvalidRequest)
 	}
+
+	// Validate CSRF token
+	csrfToken := o.Session.GetString(r.Context(), "oauth_csrf_token")
+	formCSRF := r.Form.Get("csrf_token")
+	if csrfToken == "" || subtle.ConstantTimeCompare([]byte(csrfToken), []byte(formCSRF)) != 1 {
+		return nil, NewErrorResponse(ErrInvalidRequest)
+	}
+	// Clear the CSRF token after use (single-use)
+	o.Session.Remove(r.Context(), "oauth_csrf_token")
 
 	// validate the request for all required fields and confirm values are provided for the field.
 	requiredFields := []string{
 		"client_id",
+		"csrf_token",
 		"grant_type",
 		"response_type",
 		"redirect_uri",
@@ -307,105 +373,86 @@ func (o *Service) AuthorizationGrantExchangePost(w http.ResponseWriter, r *http.
 
 	// required
 	for _, field := range requiredFields {
-		//if !params.Has(field) {
 		if !r.Form.Has(field) {
-			fmt.Println(135)
 			return nil, NewErrorResponse(ErrInvalidRequest)
 		}
 	}
 
 	// not empty
 	for _, field := range requiredFields {
-		//formField := params.Get(field)
-		formField := r.Form.Get(field)
-		if strings.TrimSpace(formField) == "" {
-			if len(formField) > 0 {
-				fmt.Println(13)
-				return nil, NewErrorResponse(ErrInvalidRequest)
-			}
+		if strings.TrimSpace(r.Form.Get(field)) == "" {
+			return nil, NewErrorResponse(ErrInvalidRequest)
 		}
 	}
 
-	//if params.Get("grant_type") == "authorization code" {
-	if r.Form.Get("grant_type") == "authorization code" {
-		fmt.Println(144)
+	if r.Form.Get("grant_type") != "authorization_code" {
 		return nil, NewErrorResponse(ErrUnsupportedGrantType)
 	}
 
 	// validate the client
-	//clientId := params.Get("client_id")
 	clientId := r.Form.Get("client_id")
 	cid, err := strconv.Atoi(clientId)
 	if err != nil {
-		fmt.Println(155, clientId)
 		return nil, NewErrorResponse(ErrInvalidClient)
 	}
 
 	client, err := o.GetClient(cid)
 	if client == nil {
-		fmt.Println(16)
 		return nil, NewErrorResponse(ErrInvalidClient)
 	}
 
 	if err != nil {
-		fmt.Println(17)
 		return nil, NewErrorResponse(ErrInvalidClient)
 	}
 
 	// client type supported by the method
-	var supportedClientTypes = []string{
-		"authorization_grant",
-		"authorization_grant_pkce",
-		"authorization_grant_pkce_implicit",
+	if client.Type != "authorization_code" {
+		return nil, NewErrorResponse(ErrUnsupportedGrantType)
 	}
-
-	ok := false
-	for _, t := range supportedClientTypes {
-		if t == client.Type {
-			ok = true
-			break
-		}
-	}
-	if !ok {
-		fmt.Println(1881)
+	supportedFlows := []string{FlowPlain, FlowPKCE, FlowPKCEImplicit}
+	if !slices.Contains(supportedFlows, client.Flow) {
 		return nil, NewErrorResponse(ErrUnsupportedGrantType)
 	}
 
-	// validate the challenge code and method
-	//_, err = ChallengeCodeValidate(params.Get("code_challenge"), params.Get("code_challenge_method"))
-	_, err = ChallengeCodeValidate(r.Form.Get("code_challenge"), r.Form.Get("code_challenge_method"))
-	if err != nil {
-		fmt.Println(19)
-		return nil, NewErrorResponse(err)
+	if !o.ValidateClientRedirect(r.Form.Get("redirect_uri"), client) {
+		return nil, NewErrorResponse(ErrInvalidRedirectURI)
 	}
 
-	switch client.Type {
-	case "authorization_grant":
+	// validate the challenge code and method
+	_, err = ChallengeCodeValidate(r.Form.Get("code_challenge"), r.Form.Get("code_challenge_method"))
+	if err != nil {
+		authErrorRedirect(w, r, r.Form.Get("redirect_uri"), r.Form.Get("state"), err)
+		return nil, nil
+	}
+
+	switch client.Flow {
+	case FlowPlain:
 		redirect, err := o.AuthorizationClientExchange(w, r, client)
 		if err != nil {
-			fmt.Println(187)
-			return nil, err
+			authErrorRedirect(w, r, r.Form.Get("redirect_uri"), r.Form.Get("state"), errors.New(err.Error))
+			return nil, nil
 		}
 
 		return redirect, nil
-	case "authorization_grant_pkce":
+	case FlowPKCE:
 		redirect, err := o.AuthorizationClientCodeExchange(w, r, client)
 		if err != nil {
-			fmt.Println(176)
-			return nil, err
+			authErrorRedirect(w, r, r.Form.Get("redirect_uri"), r.Form.Get("state"), errors.New(err.Error))
+			return nil, nil
 		}
 
 		return redirect, nil
-	case "authorization_grant_pkce_implicit":
+	case FlowPKCEImplicit:
 		auth, err := o.AuthorizationClientCodeExchangeImplicit(w, r, client)
 		if err != nil {
-			fmt.Println(1987)
-			return nil, err
+			authErrorRedirect(w, r, r.Form.Get("redirect_uri"), r.Form.Get("state"), errors.New(err.Error))
+			return nil, nil
 		}
 
 		return auth, nil
 	default:
-		return nil, NewErrorResponse(ErrInvalidClient)
+		authErrorRedirect(w, r, r.Form.Get("redirect_uri"), r.Form.Get("state"), ErrInvalidClient)
+		return nil, nil
 	}
 }
 
@@ -429,14 +476,11 @@ func (o *Service) AuthorizationGrantExchangePost(w http.ResponseWriter, r *http.
 //	// response.AccessToken contains the bearer token
 //	// response.RefreshToken contains the refresh token (if applicable)
 func (o *Service) AccessTokenGrantExchange(w http.ResponseWriter, r *http.Request) (*OauthResponse, *ErrorResponse) {
-	fmt.Println(4)
 	err := r.ParseForm()
 	if err != nil {
-		fmt.Println(25)
 		return nil, NewErrorResponse(ErrInvalidRequest)
 	}
 
-	fmt.Println(5)
 	// handle authorization grant pkce and authorization grant pkce implicit code exchange
 	if r.Form.Has("code") && r.Form.Has("code_verifier") && r.Form.Has("code_challenge_method") {
 		requiredFields := []string{
@@ -451,19 +495,14 @@ func (o *Service) AccessTokenGrantExchange(w http.ResponseWriter, r *http.Reques
 		// required
 		for _, field := range requiredFields {
 			if !r.Form.Has(field) {
-				fmt.Println(127)
 				return nil, NewErrorResponse(ErrInvalidRequest)
 			}
 		}
 
 		// not empty
 		for _, field := range requiredFields {
-			formField := r.Form.Get(field)
-			if strings.TrimSpace(formField) == "" {
-				if len(formField) > 0 {
-					fmt.Println(13)
-					return nil, NewErrorResponse(ErrInvalidRequest)
-				}
+			if strings.TrimSpace(r.Form.Get(field)) == "" {
+				return nil, NewErrorResponse(ErrInvalidRequest)
 			}
 		}
 
@@ -471,7 +510,6 @@ func (o *Service) AccessTokenGrantExchange(w http.ResponseWriter, r *http.Reques
 		clientId := r.Form.Get("client_id")
 		cid, err := strconv.Atoi(clientId)
 		if err != nil {
-			fmt.Println(6)
 			return nil, NewErrorResponse(ErrInvalidClient)
 		}
 
@@ -489,41 +527,28 @@ func (o *Service) AccessTokenGrantExchange(w http.ResponseWriter, r *http.Reques
 		}
 
 		// validate client is a supported client for the workflow
-		var supportedClientTypes = []string{
-			"authorization_grant_pkce",
-			"authorization_grant_pkce_implicit",
+		if client.Type != "authorization_code" {
+			return nil, NewErrorResponse(ErrInvalidClient)
 		}
-
-		ok := false
-		for _, t := range supportedClientTypes {
-			if t == client.Type {
-				ok = true
-				break
-			}
-		}
-
-		if !ok {
-			fmt.Println(36)
+		if !slices.Contains([]string{FlowPKCE, FlowPKCEImplicit}, client.Flow) {
 			return nil, NewErrorResponse(ErrInvalidClient)
 		}
 
 		// The validation here is a bit different for the code exchange. The code_challenge and code challenge_method are used to verify
 		// 1. look up the authorization token by code in the db
-		authorizationToken, err := o.GetAuthorizationTokenByToken(r.Form.Get("code"))
+		authorizationToken, err := o.ConsumeAuthorizationToken(r.Form.Get("code"))
 		if err != nil {
-			fmt.Println(31)
 			return nil, NewErrorResponse(ErrInvalidClient)
 		}
 
 		// 2. Validate client provided code challenge
-		ok = o.VerifyAuthorizationCode(*authorizationToken, r.Form.Get("code_verifier"))
+		ok := o.VerifyAuthorizationCode(*authorizationToken, r.Form.Get("code_verifier"))
 		if !ok {
 			return nil, NewErrorResponse(ErrInvalidCodeChallenge)
 		}
 
 		// 3. does the token challenge code method match the provided code_challenge_method
 		if authorizationToken.ChallengeCodeMethod != r.Form.Get("code_challenge_method") {
-			fmt.Println(33)
 			return nil, NewErrorResponse(ErrInvalidCodeChallenge)
 		}
 
@@ -535,7 +560,6 @@ func (o *Service) AccessTokenGrantExchange(w http.ResponseWriter, r *http.Reques
 		// 5. is the authorization token expired?
 		ok = o.TokenIsExpired(authorizationToken)
 		if !ok {
-			fmt.Println(35)
 			return nil, NewErrorResponse(ErrInvalidGrant)
 		}
 
@@ -544,7 +568,6 @@ func (o *Service) AccessTokenGrantExchange(w http.ResponseWriter, r *http.Reques
 		// access token
 		accessToken, err := o.GenerateOauthToken()
 		if err != nil {
-			fmt.Println(75)
 			o.ErrorLog.Println(err)
 			return nil, NewErrorResponse(ErrServerError)
 		}
@@ -554,18 +577,16 @@ func (o *Service) AccessTokenGrantExchange(w http.ResponseWriter, r *http.Reques
 		// validate the scope provided by the client are a string of alpha-numeric characters separated with whitespaces
 		ok, _ = scopesValidate(r.Form.Get("scopes"))
 		if !ok {
-			fmt.Println(764)
 			return nil, NewErrorResponse(ErrInvalidScope)
 		}
 
 		ok = o.scopesCanBeIssued(scopesFormat(r.Form.Get("scopes")))
 		if !ok {
-			fmt.Println(765)
 			return nil, NewErrorResponse(ErrInvalidScope)
 		}
 
 		// We need to check if the scopes can be issued to the client
-		if client.Type == "authorization_grant_pkce" {
+		if client.Flow == FlowPKCE {
 			accessToken.UserID = authorizationToken.UserID
 
 			ok, _ := scopesValidate(r.Form.Get("scopes"))
@@ -582,7 +603,7 @@ func (o *Service) AccessTokenGrantExchange(w http.ResponseWriter, r *http.Reques
 			accessToken.Scopes = strings.Join(f, " ")
 		}
 
-		if client.Type == "authorization_grant_pkce_implicit" {
+		if client.Flow == FlowPKCEImplicit {
 
 			// can the scopes be issues to the client by the Authorization Sever?
 			ok, _ := scopesValidate(r.Form.Get("scopes"))
@@ -600,25 +621,23 @@ func (o *Service) AccessTokenGrantExchange(w http.ResponseWriter, r *http.Reques
 			for _, scope := range f {
 				_, ok := o.Config.PkceImplicitAuthorizationScopes[scope]
 				if !ok {
-					fmt.Println(77)
 					return nil, NewErrorResponse(ErrInvalidScope)
 				}
 			}
 
 			accessToken.Scopes = strings.Join(f, " ")
 
-			accessToken.Expires = time.Now().UTC().Add(o.Config.PkceImplicitTTL * time.Minute)
+			accessToken.Expires = time.Now().UTC().Add(o.Config.PkceImplicitTTL)
 		}
 
 		_, err = o.InsertOauthToken(accessToken)
 
 		if err != nil {
-			fmt.Println(78)
 			o.ErrorLog.Println(err)
 			return nil, NewErrorResponse(ErrServerError)
 		}
 
-		if client.Type == "authorization_grant_pkce" {
+		if client.Flow == FlowPKCE {
 			// Generate a refresh token that can be used when the current access token becomes invalid or expires.
 			refreshToken, err := o.GenerateRefreshToken(*authorizationToken.UserID, accessToken.ID, client.ID)
 			if err != nil {
@@ -633,33 +652,23 @@ func (o *Service) AccessTokenGrantExchange(w http.ResponseWriter, r *http.Reques
 				return nil, NewErrorResponse(ErrServerError)
 			}
 
-			// delete the authorization token from storage
-			err = o.DeleteAuthorizationToken(authorizationToken.ID)
-			if err != nil {
-				o.ErrorLog.Println(err)
-			}
-
 			response := OauthResponse{
-				GrantType:    "authorization_grant_pkce",
+				GrantType:    "authorization_code",
 				TokenType:    "Bearer",
-				ExpiresIn:    time.Duration(accessToken.Expires.UnixNano()),
+				ExpiresIn:    int64(time.Until(accessToken.Expires).Seconds()),
 				AccessToken:  accessToken.PlainText,
 				RefreshToken: refreshToken.PlainText,
+				Scope:        accessToken.Scopes,
 			}
 			return &response, nil
 		}
 
-		// delete the authorization token from storage
-		err = o.DeleteAuthorizationToken(authorizationToken.ID)
-		if err != nil {
-			o.ErrorLog.Println(err)
-		}
-
 		response := OauthResponse{
-			GrantType:   "authorization_grant_pkce_implicit",
+			GrantType:   "authorization_code",
 			TokenType:   "Bearer",
-			ExpiresIn:   time.Duration(accessToken.Expires.UnixNano()),
+			ExpiresIn:   int64(time.Until(accessToken.Expires).Seconds()),
 			AccessToken: accessToken.PlainText,
+			Scope:       accessToken.Scopes,
 		}
 		return &response, nil
 	}
@@ -667,38 +676,31 @@ func (o *Service) AccessTokenGrantExchange(w http.ResponseWriter, r *http.Reques
 	// Handle exchange for other grant types
 	// check the request for all required fields and confirm values are provided for the field.
 	requiredFields := []string{
-		"client_id",
-		"client_secret",
 		"grant_type",
 		"scopes",
 	}
 
-	if r.Form.Get("grant_type") == "resource_owner_password_credentials" {
+	if r.Form.Get("grant_type") == "password" {
 		requiredFields = append(requiredFields, "username", "password")
 	}
 
 	// required
 	for _, field := range requiredFields {
 		if !r.Form.Has(field) {
-			fmt.Println(120)
 			return nil, NewErrorResponse(ErrInvalidRequest)
 		}
 	}
 
 	// not empty
 	for _, field := range requiredFields {
-		formField := r.Form.Get(field)
-		if strings.TrimSpace(formField) == "" {
-			if len(formField) > 0 {
-				fmt.Println(13)
-				return nil, NewErrorResponse(ErrInvalidRequest)
-			}
+		if strings.TrimSpace(r.Form.Get(field)) == "" {
+			return nil, NewErrorResponse(ErrInvalidRequest)
 		}
 	}
 
 	var supportedGrantTypes = []string{
 		"client_credentials",
-		"resource_owner_password_credentials",
+		"password",
 	}
 	isSupportedGrant := false
 	for _, grantType := range supportedGrantTypes {
@@ -709,34 +711,22 @@ func (o *Service) AccessTokenGrantExchange(w http.ResponseWriter, r *http.Reques
 	}
 
 	if !isSupportedGrant {
-		fmt.Println(123)
-		return nil, NewErrorResponse(ErrUnauthorizedClient)
+		return nil, NewErrorResponse(ErrUnsupportedGrantType)
 	}
 
 	// validate the client
-	clientId := r.Form.Get("client_id")
-	clientSecret := r.Form.Get("client_secret")
+	clientId, clientSecret := extractClientCredentials(r)
+	if clientId == "" || clientSecret == "" {
+		return nil, NewErrorResponse(ErrInvalidClient)
+	}
 	cid, err := strconv.Atoi(clientId)
 	if err != nil {
-		fmt.Println(6)
 		return nil, NewErrorResponse(ErrInvalidClient)
 	}
 
-	client, err := o.GetClient(cid)
-	if client == nil {
-		return nil, NewErrorResponse(ErrInvalidClient)
-	}
-
-	if err != nil {
-		return nil, NewErrorResponse(ErrInvalidClient)
-	}
-
-	if client.Secret != clientSecret {
-		return nil, NewErrorResponse(ErrInvalidClient)
-	}
-
-	if client.Revoked != 0 {
-		return nil, NewErrorResponse(ErrInvalidClient)
+	client, errRes := o.validateClientWithSecret(cid, clientSecret)
+	if errRes != nil {
+		return nil, errRes
 	}
 
 	if client.Type != r.Form.Get("grant_type") {
@@ -764,7 +754,6 @@ func (o *Service) AccessTokenGrantExchange(w http.ResponseWriter, r *http.Reques
 
 		ok = o.scopesCanBeIssued(f)
 		if !ok {
-			fmt.Println(791)
 			return nil, NewErrorResponse(ErrInvalidScope)
 		}
 
@@ -780,15 +769,16 @@ func (o *Service) AccessTokenGrantExchange(w http.ResponseWriter, r *http.Reques
 		response := OauthResponse{
 			GrantType:   "client_credentials",
 			TokenType:   "Bearer",
-			ExpiresIn:   time.Duration(token.Expires.UnixNano()),
+			ExpiresIn:   int64(time.Until(token.Expires).Seconds()),
 			AccessToken: token.PlainText,
+			Scope:       token.Scopes,
 		}
 		return &response, nil
 	}
 
 	// Resource Owner Password Credentials
 	// https://datatracker.ietf.org/doc/html/rfc6749#section-4.3
-	if r.Form.Get("grant_type") == "resource_owner_password_credentials" {
+	if r.Form.Get("grant_type") == "password" {
 		requiredFields := []string{
 			"username",
 			"password",
@@ -796,9 +786,7 @@ func (o *Service) AccessTokenGrantExchange(w http.ResponseWriter, r *http.Reques
 
 		// required
 		for _, field := range requiredFields {
-			fmt.Println(field)
 			if !r.Form.Has(field) {
-				fmt.Println(121)
 				return nil, NewErrorResponse(ErrInvalidRequest)
 			}
 		}
@@ -809,27 +797,23 @@ func (o *Service) AccessTokenGrantExchange(w http.ResponseWriter, r *http.Reques
 			"password",
 		}
 		for _, field := range notEmptyFields {
-			formField := r.Form.Get(field)
-			if strings.TrimSpace(formField) == "" {
-				if len(formField) > 0 {
-					fmt.Println(13)
-					return nil, NewErrorResponse(ErrInvalidRequest)
-				}
+			if strings.TrimSpace(r.Form.Get(field)) == "" {
+				return nil, NewErrorResponse(ErrInvalidRequest)
 			}
 		}
 
 		token, refreshToken, err := o.ResourceOwnerTokenExchange(r, w, *client)
 		if err != nil {
-			fmt.Println(543)
 			return nil, err
 		}
 
 		response := OauthResponse{
-			GrantType:    "resource_owner_password_credentials",
+			GrantType:    "password",
 			TokenType:    "Bearer",
-			ExpiresIn:    time.Duration(token.Expires.UnixNano()),
+			ExpiresIn:    int64(time.Until(token.Expires).Seconds()),
 			AccessToken:  token.PlainText,
 			RefreshToken: refreshToken.PlainText,
+			Scope:        token.Scopes,
 		}
 		return &response, nil
 	}
@@ -861,8 +845,6 @@ func (o *Service) RefreshTokenExchange(w http.ResponseWriter, r *http.Request) (
 
 	// Per RFC 6749 require client authentication for confidential clients or for any client that was issued client credentials
 	requiredFields := []string{
-		"client_id",
-		"client_secret",
 		"grant_type",
 		"scopes",
 		"refresh_token",
@@ -877,39 +859,13 @@ func (o *Service) RefreshTokenExchange(w http.ResponseWriter, r *http.Request) (
 
 	// not empty
 	notEmptyFields := []string{
-		"client_id",
-		"client_secret",
 		"grant_type",
 		"refresh_token",
 	}
 	for _, field := range notEmptyFields {
-		formField := r.Form.Get(field)
-		if strings.TrimSpace(formField) == "" {
-			if len(formField) > 0 {
-				fmt.Println(13)
-				return nil, NewErrorResponse(ErrInvalidRequest)
-			}
+		if strings.TrimSpace(r.Form.Get(field)) == "" {
+			return nil, NewErrorResponse(ErrInvalidRequest)
 		}
-	}
-
-	var supportedClientTypes = []string{
-		"authorization_grant",
-		"authorization_grant_pkce",
-		"client_credentials",
-		"refresh_token",
-		"resource_owner_password_credentials",
-	}
-
-	ok := false
-	for _, t := range supportedClientTypes {
-		if t == r.Form.Get("grant_type") {
-			ok = true
-			break
-		}
-	}
-	if !ok {
-		fmt.Println(18)
-		return nil, NewErrorResponse(ErrUnsupportedGrantType)
 	}
 
 	if r.Form.Get("grant_type") != "refresh_token" {
@@ -917,68 +873,51 @@ func (o *Service) RefreshTokenExchange(w http.ResponseWriter, r *http.Request) (
 	}
 
 	// authenticate the client
-	clientId := r.Form.Get("client_id")
-	clientSecret := r.Form.Get("client_secret")
+	clientId, clientSecret := extractClientCredentials(r)
+	if clientId == "" || clientSecret == "" {
+		return nil, NewErrorResponse(ErrInvalidClient)
+	}
 
 	cid, err := strconv.Atoi(clientId)
 	if err != nil {
-		fmt.Println(11)
 		return nil, NewErrorResponse(ErrInvalidClient)
 	}
 
-	client, err := o.GetClient(cid)
-	if client == nil {
-		return nil, NewErrorResponse(ErrInvalidClient)
-	}
-
-	if err != nil {
-		return nil, NewErrorResponse(ErrInvalidClient)
-	}
-
-	if client.Secret != clientSecret {
-		return nil, NewErrorResponse(ErrInvalidClient)
-	}
-
-	if client.Revoked != 0 {
-		return nil, NewErrorResponse(ErrInvalidClient)
+	client, errRes := o.validateClientWithSecret(cid, clientSecret)
+	if errRes != nil {
+		return nil, errRes
 	}
 
 	// validate the refresh_token
 	rt, err := o.GetRefreshByToken(r.Form.Get("refresh_token"))
 	if err != nil || rt == nil {
-		fmt.Println(14)
 		return nil, NewErrorResponse(ErrInvalidRefreshToken)
 	}
 
 	// ensure that the refresh token was issued to the authenticated client
 	at, err := o.GetOauthToken(rt.AccessTokenID)
 	if err != nil || at == nil {
-		fmt.Println(15)
 		return nil, NewErrorResponse(ErrInvalidRefreshToken)
 	}
 
 	requestClientID, err := strconv.Atoi(r.Form.Get("client_id"))
 	if err != nil {
-		o.ErrorLog.Println(16)
 		return nil, NewErrorResponse(ErrInvalidClient)
 	}
 
 	if at.ClientID != requestClientID {
-		fmt.Println(17)
 		return nil, NewErrorResponse(ErrInvalidClient)
 	}
 
 	// Is the refresh token expired?
-	ok = o.TokenIsExpired(rt)
+	ok := o.TokenIsExpired(rt)
 	if !ok {
-		fmt.Println(935)
 		return nil, NewErrorResponse(ErrExpiredRefreshToken)
 	}
 
 	// validate the scopes provided are formatted properly
 	ok, _ = scopesValidate(r.Form.Get("scopes"))
 	if !ok {
-		fmt.Println(194)
 		return nil, NewErrorResponse(ErrInvalidScope)
 	}
 
@@ -988,7 +927,6 @@ func (o *Service) RefreshTokenExchange(w http.ResponseWriter, r *http.Request) (
 		existingScopes := strings.Split(at.Scopes, " ")
 		for _, scope := range scopesMap {
 			if !slices.Contains(existingScopes, scope) {
-				fmt.Println(187)
 				return nil, NewErrorResponse(ErrInvalidScope)
 			}
 		}
@@ -1036,11 +974,12 @@ func (o *Service) RefreshTokenExchange(w http.ResponseWriter, r *http.Request) (
 	}
 
 	response := OauthResponse{
-		GrantType:    "authorization_grant_pkce_implicit",
+		GrantType:    "refresh_token",
 		TokenType:    "Bearer",
-		ExpiresIn:    time.Duration(accessToken.Expires.UnixNano()),
+		ExpiresIn:    int64(time.Until(accessToken.Expires).Seconds()),
 		AccessToken:  accessToken.PlainText,
 		RefreshToken: refreshToken.PlainText,
+		Scope:        accessToken.Scopes,
 	}
 	return &response, nil
 

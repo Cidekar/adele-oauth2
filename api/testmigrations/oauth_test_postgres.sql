@@ -29,6 +29,7 @@ CREATE TABLE oauth_clients (
     user_id integer REFERENCES users (id) ON DELETE CASCADE ON UPDATE CASCADE,
     name character varying(255) NOT NULL,
     type character varying(255) NOT NULL,
+    flow character varying(255) NOT NULL DEFAULT '',
     secret character varying(255) NOT NULL,
     revoked integer NOT NULL DEFAULT 0,
     redirect_url TEXT DEFAULT '',

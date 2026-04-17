@@ -1,14 +1,13 @@
-module github.com/harrisonde/oauth
+module github.com/cidekar/adele-oauth2
 
 go 1.23.4
-
-replace github.com/cidekar/adele-framework => /Users/harrisondestefano/Documents/_cidekar/adele-framework-fork
 
 require (
 	github.com/CloudyKit/jet/v6 v6.3.1
 	github.com/alexedwards/scs/v2 v2.9.0
 	github.com/cidekar/adele-framework v1.0.3
 	github.com/google/uuid v1.6.0
+	github.com/joho/godotenv v1.5.1
 	github.com/upper/db/v4 v4.10.0
 	golang.org/x/crypto v0.41.0
 	gopkg.in/yaml.v2 v2.4.0
@@ -52,7 +51,6 @@ require (
 	github.com/jackc/pgx/v5 v5.7.2 // indirect
 	github.com/jackc/puddle/v2 v2.2.2 // indirect
 	github.com/jmespath/go-jmespath v0.4.0 // indirect
-	github.com/joho/godotenv v1.5.1 // indirect
 	github.com/json-iterator/go v1.1.12 // indirect
 	github.com/justinas/nosurf v1.2.0 // indirect
 	github.com/klauspost/compress v1.18.0 // indirect

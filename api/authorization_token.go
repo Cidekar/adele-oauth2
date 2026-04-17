@@ -3,6 +3,7 @@ package api
 import (
 	"crypto/rand"
 	"crypto/sha256"
+	"crypto/subtle"
 	"encoding/base32"
 	"encoding/base64"
 	"fmt"
@@ -15,9 +16,8 @@ import (
 
 // Create a new authorization token
 func (o *Service) GenerateAuthorizationToken() (*AuthorizationToken, error) {
-	fmt.Println(time.Now().UTC().Add(o.Config.AuthorizationTokenTTL * time.Minute))
 	token := &AuthorizationToken{
-		Expires: time.Now().UTC().Add(o.Config.AuthorizationTokenTTL * time.Minute),
+		Expires: time.Now().UTC().Add(o.Config.AuthorizationTokenTTL),
 	}
 
 	randomBytes := make([]byte, 16)
@@ -33,13 +33,14 @@ func (o *Service) GenerateAuthorizationToken() (*AuthorizationToken, error) {
 	return token, nil
 }
 
-// Get a authorization token by the token's plain text value from the database.
+// Get a authorization token by hashing the plain text value and querying token_hash.
 func (o *Service) GetAuthorizationTokenByToken(plainText string) (*AuthorizationToken, error) {
 
 	collection := DB.Collection("authorization_tokens")
 
 	var token AuthorizationToken
-	res := collection.Find(up.Cond{"token": plainText})
+	hash := sha256.Sum256([]byte(plainText))
+	res := collection.Find(up.Cond{"token_hash": hash[:]})
 	err := res.One(&token)
 	if err != nil {
 		return nil, err
@@ -55,7 +56,11 @@ func (o *Service) InsertAuthorizationToken(token *AuthorizationToken) (*Authoriz
 	token.CreatedAt = time.Now()
 	token.UpdatedAt = time.Now()
 
+	// Do not persist plaintext to DB; keep it in-memory for the HTTP response.
+	plain := token.PlainText
+	token.PlainText = ""
 	res, err := collection.Insert(token)
+	token.PlainText = plain
 	if err != nil {
 		return nil, err
 	}
@@ -77,7 +82,31 @@ func (o *Service) VerifyAuthorizationCode(token AuthorizationToken, codeVerifier
 	bs := sha.Sum(nil)
 	challengeCodeHash := strings.Replace(base64.URLEncoding.EncodeToString([]byte(bs)), "=", "", -1)
 
-	return token.ChallengeCode == challengeCodeHash
+	return subtle.ConstantTimeCompare([]byte(token.ChallengeCode), []byte(challengeCodeHash)) == 1
+}
+
+// ConsumeAuthorizationToken atomically retrieves and deletes an authorization token.
+// Returns the token if found and deleted, nil if already consumed or not found.
+func (o *Service) ConsumeAuthorizationToken(plainText string) (*AuthorizationToken, error) {
+	hash := sha256.Sum256([]byte(plainText))
+
+	var token AuthorizationToken
+
+	err := DB.Tx(func(sess up.Session) error {
+		col := sess.Collection("authorization_tokens")
+		res := col.Find(up.Cond{"token_hash": hash[:]})
+
+		if err := res.One(&token); err != nil {
+			return err
+		}
+		return res.Delete()
+	})
+
+	if err != nil {
+		return nil, err
+	}
+
+	return &token, nil
 }
 
 // delete a authorization token by id from the database and return an error if necessary

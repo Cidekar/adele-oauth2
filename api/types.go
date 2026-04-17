@@ -77,7 +77,8 @@ type AuthorizationResponse struct {
 	TokenType   string      `json:"token_type"`
 	Code        string      `json:"code"`
 	State       string      `json:"state"`
-	RedirectUri RedirectUri `json:redirectURL`
+	RedirectUri RedirectUri `json:"redirectURL"`
+	CSRFToken   string      `json:"-"`
 }
 
 // OauthResponse represents the response from a token exchange request.
@@ -93,19 +94,19 @@ type AuthorizationResponse struct {
 //	//   "expires_in": 3600
 //	// }
 type OauthResponse struct {
-	GrantType          string        `json:"-"`
-	TokenType          string        `json:"token_type,omitempty"`
-	ExpiresIn          time.Duration `json:"expires_in"`
-	AccessToken        string        `json:"access_token,omitempty"`
-	AuthorizationToken string        `json:"authorization_code,omitempty"`
-	RefreshToken       string        `json:"refresh_token,omitempty"`
+	GrantType    string `json:"-"`
+	TokenType    string `json:"token_type"`
+	ExpiresIn    int64  `json:"expires_in"`
+	AccessToken  string `json:"access_token"`
+	RefreshToken string `json:"refresh_token,omitempty"`
+	Scope        string `json:"scope,omitempty"`
 }
 
 type AuthorizationToken struct {
 	ID                  int       `db:"id,omitempty" json:"id"`
 	UserID              *int      `db:"user_id,omitempty" json:"user_id"`
 	ClientID            int       `db:"client_id" json:"client_id"`
-	PlainText           string    `db:"token" json:"token"`
+	PlainText           string    `db:"-" json:"token"`
 	Hash                []byte    `db:"token_hash" json:"-"`
 	CreatedAt           time.Time `db:"created_at" json:"created_at"`
 	UpdatedAt           time.Time `db:"updated_at" json:"updated_at"`
@@ -119,7 +120,7 @@ type OauthToken struct {
 	ID           int       `db:"id,omitempty" json:"id"`
 	UserID       *int      `db:"user_id,omitempty" json:"user_id"`
 	ClientID     int       `db:"client_id" json:"client_id"`
-	PlainText    string    `db:"token" json:"token"`
+	PlainText    string    `db:"-" json:"token"`
 	Hash         []byte    `db:"token_hash" json:"-"`
 	CreatedAt    time.Time `db:"created_at" json:"created_at"`
 	UpdatedAt    time.Time `db:"updated_at" json:"updated_at"`
@@ -133,15 +134,14 @@ type RefreshToken struct {
 	AccessTokenID int       `db:"access_token_id" json:"-"`
 	Expires       time.Time `db:"expiry" json:"expiry"`
 	Hash          []byte    `db:"token_hash" json:"-"`
-	PlainText     string    `db:"token" json:"token"`
+	PlainText     string    `db:"-" json:"token"`
 	CreatedAt     time.Time `db:"created_at" json:"created_at"`
 	UpdatedAt     time.Time `db:"updated_at" json:"updated_at"`
 }
 
 // Client represents an OAuth2 client application registered with the server.
-// Supports multiple grant types: client_credentials, authorization_grant,
-// authorization_grant_pkce, authorization_grant_pkce_implicit, and
-// resource_owner_password_credentials.
+// Type contains the RFC 6749 grant type: "authorization_code", "client_credentials", or "password".
+// Flow discriminates authorization_code sub-flows: "plain", "pkce", or "pkce_implicit".
 //
 // Example:
 //
@@ -155,9 +155,11 @@ type Client struct {
 	ID          int       `db:"id,omitempty" json:"id"`
 	UserID      *int      `db:"user_id,omitempty" json:"user_id"`
 	Secret      string    `db:"secret" json:"secret"`
+	PlainText   string    `db:"-" json:"-"`
 	Name        string    `db:"name"`
 	Revoked     int       `db:"revoked"`
 	Type        string    `db:"type"`
+	Flow        string    `db:"flow" json:"flow"`
 	RedirectUrl string    `db:"redirect_url,omitempty" json:"redirectURL"`
 	CreatedAt   time.Time `db:"created_at"`
 	UpdatedAt   time.Time `db:"updated_at"`
@@ -171,14 +173,13 @@ type Client struct {
 //	// Returns:
 //	// {
 //	//   "error": "invalid_client",
-//	//   "description": "Client authentication failed",
-//	//   "error_code": 401
+//	//   "error_description": "Client authentication failed."
 //	// }
 type ErrorResponse struct {
-	Description string `json:"description"`
+	Description string `json:"error_description"`
 	Error       string `json:"error"`
-	ErrorCode   int    `json:"error_code"`
-	URI         string `json:"uri,omitempty"`
+	ErrorCode   int    `json:"-"`
+	URI         string `json:"error_uri,omitempty"`
 }
 
 type RedirectUri struct {

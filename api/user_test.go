@@ -31,7 +31,7 @@ func TestOauth_User(t *testing.T) {
 
 func setupUserTest(t *testing.T) Service {
 	// Run migrations via raw SQL
-	upBytes, err := templateFS.ReadFile("testmigrations/user_table.postgres.sql")
+	upBytes, err := testTemplateFS.ReadFile("testmigrations/user_table.postgres.sql")
 	if err != nil {
 		panic(err)
 	}

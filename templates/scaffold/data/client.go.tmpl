@@ -9,8 +9,8 @@ import (
 )
 
 // Client represents an OAuth2 client application stored in the database.
-// Clients can be of various types: client_credentials, authorization_grant,
-// authorization_grant_pkce, authorization_grant_pkce_implicit.
+// Clients can be of various types: client_credentials, authorization_code
+// (Flow: plain/pkce/pkce_implicit), password.
 //
 // Example:
 //
@@ -27,6 +27,7 @@ type Client struct {
 	Name      string    `db:"name"`
 	Revoked   int       `db:"revoked"`
 	Type      string    `db:"type"`
+	Flow      string    `db:"flow" json:"flow"`
 	CreatedAt time.Time `db:"created_at"`
 	UpdatedAt time.Time `db:"updated_at"`
 }

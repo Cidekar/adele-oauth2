@@ -68,7 +68,7 @@ var StatusCodes = map[error]int{
 	ErrInvalidCodeChallenge:           401,
 	ErrInvalidRefreshToken:            401,
 	ErrExpiredRefreshToken:            401,
-	ErrInvalidRedirectURI:             401,
+	ErrInvalidRedirectURI:             400,
 }
 
 // NewErrorResponse creates an ErrorResponse from an error type.
@@ -84,6 +84,9 @@ var StatusCodes = map[error]int{
 //	// Use with JSON response:
 //	w.WriteHeader(err.ErrorCode)
 //	json.NewEncoder(w).Encode(err)
+//
+// Note: ErrorCode is used for HTTP status only and is not included in the JSON response.
+// The JSON output uses error_description (Description) and error_uri (URI) per RFC 6749.
 func NewErrorResponse(err error) *ErrorResponse {
 	return &ErrorResponse{
 		Description: Descriptions[err],

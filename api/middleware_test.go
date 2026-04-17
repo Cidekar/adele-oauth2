@@ -146,7 +146,7 @@ func TestOauth_Middleware(t *testing.T) {
 
 func setupMiddlewareTest(t *testing.T) Service {
 	// Run migrations via raw SQL
-	upBytes, err := templateFS.ReadFile("testmigrations/oauth_test_postgres.sql")
+	upBytes, err := testTemplateFS.ReadFile("testmigrations/oauth_test_postgres.sql")
 	if err != nil {
 		panic(err)
 	}

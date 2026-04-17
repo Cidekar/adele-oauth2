@@ -6,7 +6,7 @@ AuthorizationTokenTTL: 120s
 OauthTokenTTL: 24h
 RefreshTokenTokenTTL: 48h
 PkceImplicitAuthorizationScopes:
-  ping: Allows access to the machine resources
+  # ping: Allows access to the machine resources
 Scopes:
-  ping: Allows access to the ping resource
-  pong: Allows to the pong resource
+  # ping: Allows access to the ping resource
+  # pong: Allows to the pong resource

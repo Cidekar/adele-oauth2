@@ -1,11 +1,10 @@
 package handlers
 
 import (
-	"fmt"
 	"net/http"
 	"strings"
 
-	"github.com/harrisonde/oauth/api"
+	"{{.Module}}/api"
 
 	"github.com/CloudyKit/jet/v6"
 )
@@ -37,6 +36,7 @@ func (h *Handlers) AuthorizationGrantExchange(w http.ResponseWriter, r *http.Req
 
 	vars := make(jet.VarMap)
 	vars.Set("url", response.RedirectUri.URI)
+	vars.Set("csrf_token", response.CSRFToken)
 	h.App.Render.Page(w, r, "login", vars, nil)
 }
 
@@ -75,17 +75,17 @@ func (h *Handlers) AuthorizationGrantExchangePost(w http.ResponseWriter, r *http
 	}
 
 	// flow may render internal view for user to confirm access
-	if response.GrantType == "authorization_grant_verify" {
+	if response.GrantType == "verify" {
 		return
 	}
 
-	if response.GrantType == "authorization_grant_pkce" {
+	if response.GrantType == "pkce" {
 		if response.RedirectUri.URI != "" {
 			http.Redirect(w, r, response.RedirectUri.URI, http.StatusFound)
 			return
 		}
 
-	} else if response.GrantType == "authorization_grant_pkce_implicit" {
+	} else if response.GrantType == "pkce_implicit" {
 		if response.TokenType == "code" {
 			h.App.Helpers.WriteJSON(w, http.StatusOK, response, nil)
 			return
@@ -118,7 +118,6 @@ func (h *Handlers) AccessTokenGrantExchange(w http.ResponseWriter, r *http.Reque
 	var err *api.ErrorResponse
 	response, err = h.Api.AccessTokenGrantExchange(w, r)
 
-	fmt.Println(r.Header.Get("Accept"))
 	if err != nil {
 		if strings.Contains(r.Header.Get("Accept"), "application/json") {
 			h.App.Helpers.WriteJSON(w, err.ErrorCode, err)
