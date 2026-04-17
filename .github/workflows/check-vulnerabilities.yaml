@@ -74,6 +74,7 @@ jobs:
           go list -json -deps ./... | nancy sleuth \
             --username "$OSS_INDEX_USERNAME" \
             --token "$OSS_INDEX_TOKEN" \
+            --exclude-vulnerability-file .nancy-ignore \
             --output text \
             --loud > nancy-detailed.txt 2>&1
           NANCY_EXIT=$?
