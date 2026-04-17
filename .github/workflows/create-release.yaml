@@ -42,7 +42,7 @@ jobs:
 
       - name: checkout
         if: steps.check_release.outputs.is_release_pr == 'true'
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           fetch-depth: 0
 
