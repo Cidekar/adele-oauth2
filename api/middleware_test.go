@@ -212,7 +212,10 @@ func setupMiddlewareTest(t *testing.T) Service {
 		},
 	}
 
-	o := NewWithConfig(&ade, config)
+	o, err := NewWithConfig(&ade, config)
+	if err != nil {
+		t.Fatalf("setup: %v", err)
+	}
 
 	// Seed the authorization token
 	ot, err := o.GenerateOauthToken()

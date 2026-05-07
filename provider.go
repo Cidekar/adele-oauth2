@@ -2,6 +2,7 @@ package oauth
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"time"
 
@@ -72,10 +73,14 @@ func (p *ServiceProvider) Register(app interface{}) error {
 	a := app.(*adele.Adele)
 
 	var svc api.Service
+	var err error
 	if p.hasConfig {
-		svc = api.NewWithConfig(a, p.config)
+		svc, err = api.NewWithConfig(a, p.config)
 	} else {
-		svc = api.New(a)
+		svc, err = api.New(a)
+	}
+	if err != nil {
+		return fmt.Errorf("oauth2: register provider: %w", err)
 	}
 	p.service = &svc
 

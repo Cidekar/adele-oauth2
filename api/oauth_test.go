@@ -14,7 +14,10 @@ import (
 )
 
 func TestOauth_Oauth_New(t *testing.T) {
-	o := New(&ade)
+	o, err := New(&ade)
+	if err != nil {
+		t.Fatalf("setup: %v", err)
+	}
 
 	if reflect.TypeOf(o).String() != "api.Service" {
 		t.Error("oauth new did not return a new Service object")
@@ -40,7 +43,10 @@ func TestOauth_Oauth_Authorization_Grant_Exchange(t *testing.T) {
 		},
 	}
 
-	o := NewWithConfig(&ade, config)
+	o, err := NewWithConfig(&ade, config)
+	if err != nil {
+		t.Fatalf("setup: %v", err)
+	}
 
 	qp := url.Values{}
 
@@ -94,7 +100,10 @@ func TestOauth_Oauth_Authorization_Grant_Exchange_Post(t *testing.T) {
 		},
 	}
 
-	o := NewWithConfig(&ade, config)
+	o, err := NewWithConfig(&ade, config)
+	if err != nil {
+		t.Fatalf("setup: %v", err)
+	}
 
 	qp := url.Values{}
 
@@ -130,7 +139,7 @@ func TestOauth_Oauth_Authorization_Grant_Exchange_Post(t *testing.T) {
 	}
 
 	// new up for testing
-	o = NewWithConfig(&ade, Configuration{
+	o, err = NewWithConfig(&ade, Configuration{
 		GuardedRouteGroups: []string{
 			"/api",
 		},
@@ -151,6 +160,9 @@ func TestOauth_Oauth_Authorization_Grant_Exchange_Post(t *testing.T) {
 			"pong": "Allows access to the pong resource",
 		},
 	})
+	if err != nil {
+		t.Fatalf("setup: %v", err)
+	}
 
 	// authorization_grant
 	qp.Set("client_id", "3")
@@ -269,7 +281,10 @@ func TestOauth_Oauth_Access_Token_Grant_Exchange(t *testing.T) {
 		},
 	}
 
-	o := NewWithConfig(&ade, config)
+	o, err := NewWithConfig(&ade, config)
+	if err != nil {
+		t.Fatalf("setup: %v", err)
+	}
 
 	qp := url.Values{}
 
@@ -370,7 +385,7 @@ func TestOauth_Oauth_Access_Token_Grant_Exchange(t *testing.T) {
 	// Create a client
 	secret := generateClientSecret()
 	collection := upper.Collection("oauth_clients")
-	_, err := collection.Insert(Client{
+	_, err = collection.Insert(Client{
 		Secret: secret,
 		Name:   "Adele",
 		Type:   "password",
@@ -492,7 +507,10 @@ func TestOauth_Oauth_Refresh_Token_Exchange(t *testing.T) {
 		},
 	}
 
-	o := NewWithConfig(&ade, config)
+	o, err := NewWithConfig(&ade, config)
+	if err != nil {
+		t.Fatalf("setup: %v", err)
+	}
 
 	qp := url.Values{}
 
@@ -515,7 +533,7 @@ func TestOauth_Oauth_Refresh_Token_Exchange(t *testing.T) {
 	// Create a client
 	secret := generateClientSecret()
 	collection := upper.Collection("oauth_clients")
-	_, err := collection.Insert(Client{
+	_, err = collection.Insert(Client{
 		Secret: secret,
 		Name:   "Adele",
 		Type:   "authorization_code",

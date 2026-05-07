@@ -61,21 +61,25 @@ func authErrorRedirect(w http.ResponseWriter, r *http.Request, redirectURI, stat
 //
 // Example:
 //
-//	facades := facades.New(adeleApp)
-//	// facades is now ready to handle OAuth2 operations
-func New(a *adele.Adele) Service {
-	o := newBase(a)
+//	svc, err := api.New(adeleApp)
+//	if err != nil {
+//	    return err
+//	}
+func New(a *adele.Adele) (Service, error) {
+	o, err := newBase(a)
+	if err != nil {
+		return Service{}, err
+	}
 
-	// Load the configuration
 	config, err := loadConfig(a)
 	if err != nil {
-		panic(err)
+		return Service{}, fmt.Errorf("oauth2: load config: %w", err)
 	}
 
 	o.Config = *config
 	setConfigDefaults(&o)
 
-	return o
+	return o, nil
 }
 
 // NewWithConfig creates a new Service instance with a custom configuration.
@@ -83,26 +87,37 @@ func New(a *adele.Adele) Service {
 //
 // Example:
 //
-//	config := facades.Configuration{Scopes: map[string]string{"read": "Read access"}}
-//	facades := facades.NewWithConfig(adeleApp, config)
-func NewWithConfig(a *adele.Adele, config Configuration) Service {
-	o := newBase(a)
+//	cfg := api.Configuration{Scopes: map[string]string{"read": "Read access"}}
+//	svc, err := api.NewWithConfig(adeleApp, cfg)
+//	if err != nil {
+//	    return err
+//	}
+func NewWithConfig(a *adele.Adele, config Configuration) (Service, error) {
+	o, err := newBase(a)
+	if err != nil {
+		return Service{}, err
+	}
 	o.Config = config
 	setConfigDefaults(&o)
-	return o
+	return o, nil
 }
 
-func newBase(a *adele.Adele) Service {
+func newBase(a *adele.Adele) (Service, error) {
+	if a.DB == nil {
+		return Service{}, errors.New("oauth2: a.DB is nil — DATABASE_TYPE is not set in .env or BootstrapDatabase did not run; the OAuth2 service requires a configured database")
+	}
+	session := a.DB.NewSession()
+	if session == nil {
+		return Service{}, errors.New("oauth2: a.DB.NewSession() returned nil — the database driver is unsupported or the connection failed; check DATABASE_TYPE, DATABASE_HOST, DATABASE_USER, DATABASE_PASSWORD, DATABASE_NAME")
+	}
+
 	o := Service{
 		Renderer: a.Render,
 		Mux:      a.Routes,
 		Session:  a.Session,
 	}
-
-	// New Database session
-	DB = a.DB.NewSession()
-
-	return o
+	DB = session
+	return o, nil
 }
 
 func setConfigDefaults(o *Service) {

@@ -42,7 +42,10 @@ func TestOauth_Client(t *testing.T) {
 		},
 	}
 
-	o := NewWithConfig(&ade, config)
+	o, err := NewWithConfig(&ade, config)
+	if err != nil {
+		t.Fatalf("setup: %v", err)
+	}
 
 	c, err := o.GetClient(1)
 	if err != nil {
@@ -294,7 +297,10 @@ func TestOauth_Client_Resource_Owner_Password_Credentials(t *testing.T) {
 		},
 	}
 
-	o := NewWithConfig(&ade, config)
+	o, err := NewWithConfig(&ade, config)
+	if err != nil {
+		t.Fatalf("setup: %v", err)
+	}
 
 	qp := url.Values{}
 

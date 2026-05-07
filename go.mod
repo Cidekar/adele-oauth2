@@ -2,6 +2,8 @@ module github.com/cidekar/adele-oauth2
 
 go 1.25.0
 
+toolchain go1.25.9
+
 require (
 	github.com/CloudyKit/jet/v6 v6.3.1
 	github.com/alexedwards/scs/v2 v2.9.0

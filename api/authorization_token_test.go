@@ -89,7 +89,11 @@ func setupAuthorizationTest(t *testing.T) Service {
 		OauthTokenTTL:         24,
 		RefreshTokenTokenTTL:  24,
 	}
-	return NewWithConfig(&ade, config)
+	svc, err := NewWithConfig(&ade, config)
+	if err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+	return svc
 }
 
 func tearDownAuthorizationTest(_ adele.Adele) {

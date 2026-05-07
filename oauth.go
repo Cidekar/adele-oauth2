@@ -14,10 +14,10 @@ type (
 	Client        = api.Client
 )
 
-func New(a *adele.Adele) Service {
+func New(a *adele.Adele) (Service, error) {
 	return api.New(a)
 }
 
-func NewWithConfig(a *adele.Adele, config Configuration) Service {
+func NewWithConfig(a *adele.Adele, config Configuration) (Service, error) {
 	return api.NewWithConfig(a, config)
 }

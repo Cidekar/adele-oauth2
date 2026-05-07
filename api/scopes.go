@@ -15,7 +15,7 @@ func scopesValidate(scopes string) (bool, error) {
 		return true, nil
 	}
 
-	re := regexp.MustCompile("^[a-zA-Z0-9]+( [a-zA-Z0-9]+)*$")
+	re := regexp.MustCompile("^[a-zA-Z0-9-]+( [a-zA-Z0-9-]+)*$")
 
 	if !re.MatchString(rawScopes) {
 		return false, fmt.Errorf("%s is not a valid scope string", rawScopes)
@@ -36,7 +36,7 @@ func scopesFormat(scopes string) []string {
 
 // iterate through a map of scopes and return a string of scopes with a white space separator and ensure each scope is alpha numeric string
 func scopesMapToString(scopes map[string]string) (string, error) {
-	re := regexp.MustCompile("^[a-zA-Z0-9-]*$")
+	re := regexp.MustCompile("^[a-zA-Z0-9-]+$")
 
 	var scopeString []string
 	for k := range scopes {
