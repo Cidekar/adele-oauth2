@@ -91,7 +91,10 @@ func setupRefreshTokenTest(t *testing.T) Service {
 		OauthTokenTTL:         24,
 		RefreshTokenTokenTTL:  24,
 	}
-	o := NewWithConfig(&ade, config)
+	o, err := NewWithConfig(&ade, config)
+	if err != nil {
+		t.Fatalf("setup: %v", err)
+	}
 
 	// Seed token
 	ot, err := o.GenerateOauthToken()
