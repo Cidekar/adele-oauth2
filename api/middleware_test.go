@@ -242,3 +242,94 @@ func tearDownMiddlewareTest(_ adele.Adele) {
 		fmt.Println(err)
 	}
 }
+
+// The revoked-client / missing-client -> 401 path is implicitly covered by the
+// existing token-validation tests in TestOauth_Middleware: AuthenticateToken
+// rejects those cases before BearerTokenHandler reaches the stamping block, so
+// no new failure mode is exercised here.
+
+func TestBearerTokenHandler_StampsTypedClientContext(t *testing.T) {
+	defer tearDownMiddlewareTest(ade)
+	o := setupMiddlewareTest(t)
+
+	var ErrorLogger *log.Logger
+	bm := BearerTokenHandler(o.Config.UnguardedRoutes, o.Config.GuardedRouteGroups, ErrorLogger, &o)
+
+	var gotClientID int
+	var gotClientName string
+	var gotAccessToken string
+	var gotClientIDOk, gotClientNameOk, gotAccessTokenOk bool
+
+	nextHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotClientID, gotClientIDOk = r.Context().Value(ContextKeyClientID).(int)
+		gotClientName, gotClientNameOk = r.Context().Value(ContextKeyClientName).(string)
+		gotAccessToken, gotAccessTokenOk = r.Context().Value(ContextKeyAccessToken).(string)
+		w.WriteHeader(http.StatusOK)
+	})
+
+	req := httptest.NewRequest("GET", o.Config.GuardedRouteGroups[0], nil)
+	req.Header.Add("Accept", "application/json")
+	req.Header.Add("Authorization", "Bearer "+OauthTkn.PlainText)
+	rr := httptest.NewRecorder()
+	handler := bm(nextHandler)
+	handler.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("Expected status code %d, got %d when sending authenticated request to guarded route", http.StatusOK, rr.Code)
+	}
+
+	if !gotClientIDOk {
+		t.Fatalf("ContextKeyClientID was not stamped or not an int")
+	}
+	if gotClientID != ClientCredentialsGrant.ID {
+		t.Errorf("Expected ContextKeyClientID %d, got %d", ClientCredentialsGrant.ID, gotClientID)
+	}
+
+	if !gotClientNameOk {
+		t.Fatalf("ContextKeyClientName was not stamped or not a string")
+	}
+	if gotClientName != ClientCredentialsGrant.Name {
+		t.Errorf("Expected ContextKeyClientName %q, got %q", ClientCredentialsGrant.Name, gotClientName)
+	}
+
+	if !gotAccessTokenOk {
+		t.Fatalf("ContextKeyAccessToken was not stamped or not a string")
+	}
+	if gotAccessToken != OauthTkn.PlainText {
+		t.Errorf("Expected ContextKeyAccessToken %q, got %q", OauthTkn.PlainText, gotAccessToken)
+	}
+}
+
+func TestBearerTokenHandler_PreservesLegacyAccessTokenKey(t *testing.T) {
+	defer tearDownMiddlewareTest(ade)
+	o := setupMiddlewareTest(t)
+
+	var ErrorLogger *log.Logger
+	bm := BearerTokenHandler(o.Config.UnguardedRoutes, o.Config.GuardedRouteGroups, ErrorLogger, &o)
+
+	var gotLegacy string
+	var gotLegacyOk bool
+
+	nextHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotLegacy, gotLegacyOk = r.Context().Value("accessToken").(string)
+		w.WriteHeader(http.StatusOK)
+	})
+
+	req := httptest.NewRequest("GET", o.Config.GuardedRouteGroups[0], nil)
+	req.Header.Add("Accept", "application/json")
+	req.Header.Add("Authorization", "Bearer "+OauthTkn.PlainText)
+	rr := httptest.NewRecorder()
+	handler := bm(nextHandler)
+	handler.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("Expected status code %d, got %d when sending authenticated request to guarded route", http.StatusOK, rr.Code)
+	}
+
+	if !gotLegacyOk {
+		t.Fatalf("legacy \"accessToken\" string key was not stamped or not a string")
+	}
+	if gotLegacy != OauthTkn.PlainText {
+		t.Errorf("Expected legacy \"accessToken\" %q, got %q", OauthTkn.PlainText, gotLegacy)
+	}
+}
