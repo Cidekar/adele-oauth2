@@ -157,3 +157,19 @@ func (p *ServiceProvider) Boot(app interface{}) error {
 func init() {
 	provider.RegisterGlobalProvider(&ServiceProvider{})
 }
+
+// Service returns the underlying *api.Service so consumers can mount
+// AuthenticationTokenMiddleware on their own route groups. Returns nil if
+// the provider has not been registered yet (call after provider.LoadProviders).
+//
+// Typical use:
+//
+//	svc := oauthProvider.Service()
+//	r.Use(svc.AuthenticationTokenMiddleware())
+//
+// This is the documented escape hatch when the consumer's router doesn't
+// route through the provider's auto-mounted /oauth/* routes (e.g., chi-based
+// apps that mount oauth_subrouter separately from /v1/*).
+func (p *ServiceProvider) Service() *api.Service {
+	return p.service
+}
