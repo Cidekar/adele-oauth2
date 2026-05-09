@@ -64,7 +64,13 @@ func BearerTokenHandler(unguardedRoute []string, GuardedRouteGroups []string, Er
 				return
 			}
 
-			ctx := context.WithValue(r.Context(), "accessToken", token.PlainText)
+			ctx := r.Context()
+			if client, err := o.GetClient(token.ClientID); err == nil && client != nil {
+				ctx = context.WithValue(ctx, ContextKeyClientID, client.ID)
+				ctx = context.WithValue(ctx, ContextKeyClientName, client.Name)
+			}
+			ctx = context.WithValue(ctx, ContextKeyAccessToken, token.PlainText)
+			ctx = context.WithValue(ctx, "accessToken", token.PlainText)
 			next.ServeHTTP(w, r.WithContext(ctx))
 		}
 		return http.HandlerFunc(fn)
