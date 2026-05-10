@@ -8,6 +8,7 @@ import (
 
 	"github.com/google/uuid"
 	up "github.com/upper/db/v4"
+	postgresql "github.com/upper/db/v4/adapter/postgresql"
 )
 
 // hashFromRefreshPlainText recovers the token_hash bytes from the plaintext.
@@ -66,7 +67,9 @@ func (o *Service) GetRefreshByToken(plainText string) (*RefreshToken, error) {
 	}
 
 	collection := DB.Collection("refresh_tokens")
-	res := collection.Find(up.Cond{"token_hash": hash})
+	// See note in oauth_token.go GetByToken: wrap []byte with postgresql.Bytea
+	// to avoid SQLSTATE 22021 from upper/db's []byte->string conversion.
+	res := collection.Find(up.Cond{"token_hash": postgresql.Bytea(hash)})
 	err = res.One(&token)
 	if err != nil {
 		if err == up.ErrNoMoreRows {
@@ -86,7 +89,9 @@ func (o *Service) DeleteRefreshTokenByToken(plainText string) error {
 	}
 
 	collection := DB.Collection("refresh_tokens")
-	res := collection.Find(up.Cond{"token_hash": hash})
+	// See note in oauth_token.go GetByToken: wrap []byte with postgresql.Bytea
+	// to avoid SQLSTATE 22021 from upper/db's []byte->string conversion.
+	res := collection.Find(up.Cond{"token_hash": postgresql.Bytea(hash)})
 	err = res.Delete()
 	if err != nil {
 		return err

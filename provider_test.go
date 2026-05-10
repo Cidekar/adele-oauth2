@@ -2,6 +2,7 @@ package oauth
 
 import (
 	"os"
+	"path/filepath"
 	"testing"
 
 	adele "github.com/cidekar/adele-framework"
@@ -34,19 +35,19 @@ func TestServiceProvider_ServiceReturnsNonNilAfterRegister(t *testing.T) {
 
 	// Best-effort load of the api package's test env so DATABASE_TYPE etc. are
 	// populated when running locally. Missing file is not fatal.
-	_ = godotenv.Load(cwd + "/api/testdata/.test.env")
+	_ = godotenv.Load(cwd + "/test.env")
 
 	if os.Getenv("DATABASE_TYPE") == "" {
 		t.Skip("integration test requires DATABASE_TYPE env var")
 	}
 
 	dsn := &database.DataSourceName{
-		Host:         "localhost",
-		Port:         "5432",
-		User:         "postgres",
-		Password:     "password",
-		DatabaseName: "test",
-		SslMode:      "disable",
+		Host:         os.Getenv("DATABASE_HOST"),
+		Port:         os.Getenv("DATABASE_PORT"),
+		User:         os.Getenv("DATABASE_USER"),
+		Password:     os.Getenv("DATABASE_PASSWORD"),
+		DatabaseName: os.Getenv("DATABASE_NAME"),
+		SslMode:      os.Getenv("DATABASE_SSL_MODE"),
 	}
 	db, err := database.OpenDB(os.Getenv("DATABASE_TYPE"), dsn)
 	if err != nil {
@@ -57,6 +58,14 @@ func TestServiceProvider_ServiceReturnsNonNilAfterRegister(t *testing.T) {
 	}
 
 	var ade adele.Adele
+	// Provide a writable RootPath with a pre-created config/ subdir so that
+	// api.loadConfig can seed config/oauth.yml from the embedded template
+	// without trying to write to the filesystem root (/config/oauth.yml).
+	rootPath := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(rootPath, "config"), 0o755); err != nil {
+		t.Fatalf("setup tempdir config: %v", err)
+	}
+	ade.RootPath = rootPath
 	ade.DB = &database.Database{
 		DataType: os.Getenv("DATABASE_TYPE"),
 		Pool:     db,

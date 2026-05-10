@@ -221,6 +221,17 @@ func (o *Service) validateClientWithSecret(cid int, clientSecret string) (*Clien
 // Required form fields: client_id, grant_type, response_type, redirect_uri, state,
 // code_challenge, code_challenge_method, scopes
 //
+// REQUIREMENT: This handler stores intermediate OAuth state (CSRF token, and on
+// the POST counterpart user_id and the in-flight authorization code / PKCE
+// challenge) in the user session via o.Session.Put. The request MUST be served
+// through the framework's session.LoadAndSave middleware (auto-mounted around
+// every route registered on a.Routes) so that scs has session data wired into
+// r.Context(). Invoking this handler directly with a request whose context has
+// not been hydrated by LoadAndSave will panic ("scs: no session data in
+// context"). Tests that exercise this handler must call o.Session.Load on the
+// request context (see oauth_test.go) or wrap the handler in
+// o.Session.LoadAndSave before serving.
+//
 // Example:
 //
 //	// GET /oauth/authorize?client_id=1&grant_type=authorization_code&response_type=code&

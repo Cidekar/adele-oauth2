@@ -12,6 +12,7 @@ import (
 	"time"
 
 	up "github.com/upper/db/v4"
+	postgresql "github.com/upper/db/v4/adapter/postgresql"
 )
 
 // Create a oauth token that is always the same length each time one is generated.
@@ -107,7 +108,10 @@ func (o *Service) GetByToken(plainText string) (*OauthToken, error) {
 	var token OauthToken
 
 	hash := sha256.Sum256([]byte(plainText))
-	res := collection.Find(up.Cond{"token_hash": hash[:]})
+	// Wrap with postgresql.Bytea so upper/db's toInterfaceArguments takes the
+	// driver.Valuer fast path instead of converting []byte -> string (which makes
+	// pgx send the bytes as text and Postgres reject them with SQLSTATE 22021).
+	res := collection.Find(up.Cond{"token_hash": postgresql.Bytea(hash[:])})
 	err := res.One(&token)
 	if err != nil {
 		return nil, err
@@ -137,6 +141,14 @@ func (o *Service) GetAuthTokenFromHeader(r *http.Request) (*OauthToken, error) {
 	if err != nil {
 		return nil, errors.New("no matching token found")
 	}
+
+	// Restore plaintext from the inbound bearer header. The DB no longer
+	// stores plaintext (only token_hash bytea), so DB lookups return a
+	// struct with PlainText == "". Callers that propagate the token to
+	// downstream context keys (BearerTokenHandler stamps both typed
+	// ContextKeyAccessToken and the legacy "accessToken" string key with
+	// token.PlainText) need the plaintext value populated.
+	tkn.PlainText = token
 
 	return tkn, nil
 }

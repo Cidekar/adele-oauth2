@@ -28,6 +28,23 @@ on:
 jobs:
   release:
     runs-on: ${{ github.event.inputs.runner == 'self-hosted' && fromJSON('["self-hosted", "macOS", "ARM64", "cidekar", "macos-arm64"]') || 'ubuntu-latest' }}
+    # NOTE: GitHub Actions service containers only run on Linux runners. On the
+    # self-hosted macOS runner this block is ignored and the test step below is
+    # skipped via its `if:` guard.
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: password
+          POSTGRES_DB: test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
     steps:
       - name: install github cli
         if: runner.os == 'macOS'
@@ -56,6 +73,28 @@ jobs:
         run: |
           go build ./...
           go vet ./...
+
+      - name: write test.env
+        run: |
+          cat > test.env <<'EOF'
+          DATABASE_TYPE=postgres
+          DATABASE_HOST=localhost
+          DATABASE_PORT=5432
+          DATABASE_USER=postgres
+          DATABASE_PASSWORD=password
+          DATABASE_NAME=test
+          DATABASE_SSL_MODE=disable
+          EOF
+
+      - name: run tests
+        env:
+          GOTOOLCHAIN: auto
+        run: |
+          if [ "$RUNNER_OS" != "Linux" ]; then
+            echo "::error::Tests require GitHub Actions service containers (Linux only). Re-run this workflow with runner=github-hosted."
+            exit 1
+          fi
+          go test ./... -count=1 -race
 
       - name: extract version from tag
         id: version

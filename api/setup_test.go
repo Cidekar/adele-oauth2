@@ -38,19 +38,19 @@ func TestMain(m *testing.M) {
 
 	ade.RootPath = path + "/testdata"
 
-	err = godotenv.Load(ade.RootPath + "/.test.env")
+	err = godotenv.Load(path + "/../test.env")
 	if err != nil {
 		panic(err)
 	}
 
 	// setup the database session
 	dsn := &database.DataSourceName{
-		Host:         "localhost",
-		Port:         "5432",
-		User:         "postgres",
-		Password:     "password",
-		DatabaseName: "test",
-		SslMode:      "disable",
+		Host:         os.Getenv("DATABASE_HOST"),
+		Port:         os.Getenv("DATABASE_PORT"),
+		User:         os.Getenv("DATABASE_USER"),
+		Password:     os.Getenv("DATABASE_PASSWORD"),
+		DatabaseName: os.Getenv("DATABASE_NAME"),
+		SslMode:      os.Getenv("DATABASE_SSL_MODE"),
 	}
 	db, err := database.OpenDB(os.Getenv("DATABASE_TYPE"), dsn)
 	if err != nil {

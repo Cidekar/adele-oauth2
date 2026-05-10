@@ -1,7 +1,9 @@
 package api
 
 import (
+	"bytes"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/base32"
 	"fmt"
 	"net/http"
@@ -274,7 +276,14 @@ func TestOauth_Client(t *testing.T) {
 	}
 
 	authToken, _ := o.GetAuthorizationTokenByToken(ar.Code)
-	if ar.Code != authToken.PlainText {
+	if authToken == nil {
+		t.Fatal("authorization client code exchange did not persist a lookupable token")
+	}
+	// Plaintext is no longer stored in the database (db:"-"); verify the
+	// round-trip by comparing the SHA-256 of ar.Code against the persisted
+	// token_hash, which is what GetAuthorizationTokenByToken matched on.
+	expectedHash := sha256.Sum256([]byte(ar.Code))
+	if !bytes.Equal(expectedHash[:], authToken.Hash) {
 		t.Error("authorization client code exchange returned an unexpected code")
 	}
 

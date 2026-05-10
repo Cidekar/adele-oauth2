@@ -72,6 +72,19 @@ func TestOauth_Oauth_Authorization_Grant_Exchange(t *testing.T) {
 	qp.Set("scope", "ping pong")
 	url = o.Config.GuardedRouteGroups[0] + "?" + qp.Encode()
 	req = httptest.NewRequest("GET", url, nil)
+
+	// AuthorizationGrantExchange stores intermediate OAuth state (CSRF token) in
+	// the user session via o.Session.Put. In production this works because every
+	// route is wrapped by the framework's session.LoadAndSave middleware (see
+	// adele-framework/middleware/session.go). When invoking the handler directly
+	// in tests we must hydrate the request context with session data ourselves,
+	// otherwise scs panics with "no session data in context".
+	ctx, err := o.Session.Load(req.Context(), req.Header.Get("X-Session"))
+	if err != nil {
+		t.Fatalf("session load: %v", err)
+	}
+	req = req.WithContext(ctx)
+
 	at, errRes := o.AuthorizationGrantExchange(httptest.NewRecorder(), req)
 	if errRes != nil {
 		t.Errorf("authorization grant exchange returned %d error when it should have returned %d", errRes.ErrorCode, http.StatusOK)
@@ -109,6 +122,18 @@ func TestOauth_Oauth_Authorization_Grant_Exchange_Post(t *testing.T) {
 
 	url := o.Config.GuardedRouteGroups[0] + "?" + qp.Encode()
 	req := httptest.NewRequest("GET", url, nil)
+
+	// AuthorizationGrantExchangePost reads from the user session via
+	// o.Session.GetString. In production every route is wrapped by the
+	// framework's session.LoadAndSave middleware; tests must hydrate the
+	// request context with session data themselves to avoid scs panicking
+	// with "no session data in context".
+	firstCtx, sessErr := o.Session.Load(req.Context(), req.Header.Get("X-Session"))
+	if sessErr != nil {
+		t.Fatalf("session load: %v", sessErr)
+	}
+	req = req.WithContext(firstCtx)
+
 	_, errRes := o.AuthorizationGrantExchangePost(httptest.NewRecorder(), req)
 	if errRes.ErrorCode != StatusCodes[ErrInvalidRequest] {
 		t.Errorf("authorization grant exchange post returned %d error when it should have returned %d", errRes.ErrorCode, StatusCodes[ErrInvalidRequest])
@@ -129,6 +154,14 @@ func TestOauth_Oauth_Authorization_Grant_Exchange_Post(t *testing.T) {
 	qp.Set("scope", "ping pong")
 	url = o.Config.GuardedRouteGroups[0] + "?" + qp.Encode()
 	req = httptest.NewRequest("GET", url, nil)
+
+	// Hydrate session context — see comment above the first POST hydration.
+	getCtx, getSessErr := o.Session.Load(req.Context(), req.Header.Get("X-Session"))
+	if getSessErr != nil {
+		t.Fatalf("session load: %v", getSessErr)
+	}
+	req = req.WithContext(getCtx)
+
 	at, errRes := o.AuthorizationGrantExchange(httptest.NewRecorder(), req)
 	if errRes != nil {
 		t.Errorf("authorization grant exchange returned %d error when it should have returned %d", errRes.ErrorCode, http.StatusOK)
@@ -165,6 +198,14 @@ func TestOauth_Oauth_Authorization_Grant_Exchange_Post(t *testing.T) {
 	}
 
 	// authorization_grant
+	// AuthorizationGrantExchangePost validates a CSRF token issued by the GET
+	// half of the consent flow. In production the GET handler stores the token
+	// in the user session and renders it as a hidden form field; the POST
+	// handler then compares session-CSRF == form-CSRF. Tests bypass the GET
+	// render, so we seed both sides explicitly.
+	const testCSRF = "test-csrf-token"
+	qp.Set("csrf_token", testCSRF)
+
 	qp.Set("client_id", "3")
 	qp.Set("grant_type", "authorization_code")
 	url = o.Config.GuardedRouteGroups[0] + "?" + qp.Encode()
@@ -176,7 +217,7 @@ func TestOauth_Oauth_Authorization_Grant_Exchange_Post(t *testing.T) {
 	}
 
 	o.Session.Put(ctx, "userID", "1")
-	o.Session.Load(ctx, "1234")
+	o.Session.Put(ctx, "oauth_csrf_token", testCSRF)
 
 	req = req.WithContext(ctx)
 
@@ -204,7 +245,8 @@ func TestOauth_Oauth_Authorization_Grant_Exchange_Post(t *testing.T) {
 	}
 
 	o.Session.Put(ctx, "userID", "1")
-	o.Session.Load(ctx, "1234")
+	// Re-seed CSRF: handler clears the token after the previous block consumed it.
+	o.Session.Put(ctx, "oauth_csrf_token", testCSRF)
 
 	req = req.WithContext(ctx)
 
@@ -228,7 +270,8 @@ func TestOauth_Oauth_Authorization_Grant_Exchange_Post(t *testing.T) {
 	}
 
 	o.Session.Put(ctx, "userID", "1")
-	o.Session.Load(ctx, "1234")
+	// Re-seed CSRF: single-use token consumed on each POST.
+	o.Session.Put(ctx, "oauth_csrf_token", testCSRF)
 
 	req = req.WithContext(ctx)
 
@@ -251,6 +294,8 @@ func TestOauth_Oauth_Authorization_Grant_Exchange_Post(t *testing.T) {
 		panic(err)
 	}
 	o.Session.Put(ctx, "userID", "1")
+	// Re-seed CSRF: must pass CSRF gate to reach redirect_uri validation.
+	o.Session.Put(ctx, "oauth_csrf_token", testCSRF)
 	req = req.WithContext(ctx)
 	_, errRes = o.AuthorizationGrantExchangePost(httptest.NewRecorder(), req)
 	if errRes == nil || errRes.Error != ErrInvalidRedirectURI.Error() {
@@ -382,11 +427,19 @@ func TestOauth_Oauth_Access_Token_Grant_Exchange(t *testing.T) {
 	}
 
 	// Resource Owner Password Credentials Grant
-	// Create a client
+	// Create a client. The DB column stores a bcrypt hash; the form POST
+	// sends plaintext. validateClientWithSecret compares the plaintext form
+	// field against the bcrypt hash, so seeding the column with raw plaintext
+	// would 401 on every exchange. Use bcrypt to mirror what InsertClient does
+	// in production.
 	secret := generateClientSecret()
+	hashedSecret, err := bcrypt.GenerateFromPassword([]byte(secret), bcrypt.DefaultCost)
+	if err != nil {
+		panic(err)
+	}
 	collection := upper.Collection("oauth_clients")
 	_, err = collection.Insert(Client{
-		Secret: secret,
+		Secret: string(hashedSecret),
 		Name:   "Adele",
 		Type:   "password",
 		UserID: &user.ID,
@@ -429,11 +482,15 @@ func TestOauth_Oauth_Access_Token_Grant_Exchange(t *testing.T) {
 	}
 
 	// Client Credentials
-	// Create a client
+	// Create a client. See note above re: bcrypt — same pattern.
 	secret = generateClientSecret()
+	hashedSecret, err = bcrypt.GenerateFromPassword([]byte(secret), bcrypt.DefaultCost)
+	if err != nil {
+		panic(err)
+	}
 	collection = upper.Collection("oauth_clients")
 	_, err = collection.Insert(Client{
-		Secret: secret,
+		Secret: string(hashedSecret),
 		Name:   "Adele",
 		Type:   "client_credentials",
 		UserID: &user.ID,
@@ -530,11 +587,16 @@ func TestOauth_Oauth_Refresh_Token_Exchange(t *testing.T) {
 		ID: 1,
 	}
 
-	// Create a client
+	// Create a client. Bcrypt the secret to mirror InsertClient — see note
+	// on the password-grant client further up.
 	secret := generateClientSecret()
+	hashedSecret, err := bcrypt.GenerateFromPassword([]byte(secret), bcrypt.DefaultCost)
+	if err != nil {
+		panic(err)
+	}
 	collection := upper.Collection("oauth_clients")
 	_, err = collection.Insert(Client{
-		Secret: secret,
+		Secret: string(hashedSecret),
 		Name:   "Adele",
 		Type:   "authorization_code",
 		Flow:   "plain",
