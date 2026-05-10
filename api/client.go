@@ -165,8 +165,8 @@ func (o *Service) AuthorizationClientExchange(w http.ResponseWriter, r *http.Req
 	}
 
 	var scopes []string
-	if r.Form.Get("scopes") != "" {
-		scopes = strings.Split(r.Form.Get("scopes"), " ")
+	if formScope(r) != "" {
+		scopes = strings.Split(formScope(r), " ")
 		for i, s := range scopes {
 			scopes[i] = strings.TrimSpace(s)
 		}
@@ -281,8 +281,8 @@ func (o *Service) AuthorizationClientCodeExchange(w http.ResponseWriter, r *http
 	}
 
 	var scopes []string
-	if r.Form.Get("scopes") != "" {
-		scopes = strings.Split(r.Form.Get("scopes"), " ")
+	if formScope(r) != "" {
+		scopes = strings.Split(formScope(r), " ")
 		for i, s := range scopes {
 			scopes[i] = strings.TrimSpace(s)
 		}
@@ -388,12 +388,12 @@ func (o *Service) ResourceOwnerTokenExchange(r *http.Request, w http.ResponseWri
 	token.ClientID = client.ID
 	token.UserID = &user.ID
 
-	ok, _ := scopesValidate(r.Form.Get("scopes"))
+	ok, _ := scopesValidate(formScope(r))
 	if !ok {
 		return nil, nil, NewErrorResponse(ErrInvalidScope)
 	}
 
-	f := scopesFormat(r.Form.Get("scopes"))
+	f := scopesFormat(formScope(r))
 
 	ok = o.scopesCanBeIssued(f)
 	if !ok {

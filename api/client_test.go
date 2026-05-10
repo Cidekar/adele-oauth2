@@ -334,7 +334,7 @@ func TestOauth_Client_Resource_Owner_Password_Credentials(t *testing.T) {
 	// unauthenticated can authenticate and get access and refresh tokens with scopes
 	qp.Set("username", "adele@localhost.net")
 	qp.Set("password", "Password")
-	qp.Set("scopes", "ping pong")
+	qp.Set("scope", "ping pong")
 	url = o.Config.GuardedRouteGroups[0] + "?" + qp.Encode()
 	req = httptest.NewRequest("GET", url, nil)
 	at, rt, errRes = o.ResourceOwnerTokenExchange(req, httptest.NewRecorder(), *client)
@@ -353,7 +353,7 @@ func TestOauth_Client_Resource_Owner_Password_Credentials(t *testing.T) {
 	// unauthenticated can authenticate and get access and refresh tokens with scopes causes error
 	qp.Set("username", "adele@localhost.net")
 	qp.Set("password", "Password")
-	qp.Set("scopes", "ping pong oops")
+	qp.Set("scope", "ping pong oops")
 	url = o.Config.GuardedRouteGroups[0] + "?" + qp.Encode()
 	req = httptest.NewRequest("GET", url, nil)
 	_, _, errRes = o.ResourceOwnerTokenExchange(req, httptest.NewRecorder(), *client)
