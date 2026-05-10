@@ -310,13 +310,13 @@ func (o *Service) AuthorizationGrantExchange(w http.ResponseWriter, r *http.Requ
 	}
 
 	// Validate the scopes
-	ok, _ = scopesValidate(r.Form.Get("scopes"))
+	ok, _ = scopesValidate(formScope(r))
 	if !ok {
 		authErrorRedirect(w, r, r.Form.Get("redirect_uri"), r.Form.Get("state"), ErrInvalidScope)
 		return nil, nil
 	}
 
-	f := scopesFormat(r.Form.Get("scopes"))
+	f := scopesFormat(formScope(r))
 
 	ok = o.scopesCanBeIssued(f)
 	if !ok {
@@ -576,12 +576,12 @@ func (o *Service) AccessTokenGrantExchange(w http.ResponseWriter, r *http.Reques
 		accessToken.ClientID = client.ID
 
 		// validate the scope provided by the client are a string of alpha-numeric characters separated with whitespaces
-		ok, _ = scopesValidate(r.Form.Get("scopes"))
+		ok, _ = scopesValidate(formScope(r))
 		if !ok {
 			return nil, NewErrorResponse(ErrInvalidScope)
 		}
 
-		ok = o.scopesCanBeIssued(scopesFormat(r.Form.Get("scopes")))
+		ok = o.scopesCanBeIssued(scopesFormat(formScope(r)))
 		if !ok {
 			return nil, NewErrorResponse(ErrInvalidScope)
 		}
@@ -590,12 +590,12 @@ func (o *Service) AccessTokenGrantExchange(w http.ResponseWriter, r *http.Reques
 		if client.Flow == FlowPKCE {
 			accessToken.UserID = authorizationToken.UserID
 
-			ok, _ := scopesValidate(r.Form.Get("scopes"))
+			ok, _ := scopesValidate(formScope(r))
 			if !ok {
 				return nil, NewErrorResponse(ErrInvalidScope)
 			}
 
-			f := scopesFormat(r.Form.Get("scopes"))
+			f := scopesFormat(formScope(r))
 			ok = o.scopesCanBeIssued(f)
 			if !ok {
 				return nil, NewErrorResponse(ErrInvalidScope)
@@ -607,12 +607,12 @@ func (o *Service) AccessTokenGrantExchange(w http.ResponseWriter, r *http.Reques
 		if client.Flow == FlowPKCEImplicit {
 
 			// can the scopes be issues to the client by the Authorization Sever?
-			ok, _ := scopesValidate(r.Form.Get("scopes"))
+			ok, _ := scopesValidate(formScope(r))
 			if !ok {
 				return nil, NewErrorResponse(ErrInvalidScope)
 			}
 
-			f := scopesFormat(r.Form.Get("scopes"))
+			f := scopesFormat(formScope(r))
 			ok = o.scopesCanBeIssued(f)
 			if !ok {
 				return nil, NewErrorResponse(ErrInvalidScope)
@@ -746,12 +746,12 @@ func (o *Service) AccessTokenGrantExchange(w http.ResponseWriter, r *http.Reques
 
 		token.ClientID = client.ID
 
-		ok, _ := scopesValidate(r.Form.Get("scopes"))
+		ok, _ := scopesValidate(formScope(r))
 		if !ok {
 			return nil, NewErrorResponse(ErrInvalidScope)
 		}
 
-		f := scopesFormat(r.Form.Get("scopes"))
+		f := scopesFormat(formScope(r))
 
 		ok = o.scopesCanBeIssued(f)
 		if !ok {
@@ -917,13 +917,13 @@ func (o *Service) RefreshTokenExchange(w http.ResponseWriter, r *http.Request) (
 	}
 
 	// validate the scopes provided are formatted properly
-	ok, _ = scopesValidate(r.Form.Get("scopes"))
+	ok, _ = scopesValidate(formScope(r))
 	if !ok {
 		return nil, NewErrorResponse(ErrInvalidScope)
 	}
 
 	// RFC 6749 defines a request to refresh may not contain a scope that is not already assigned to the access token
-	scopesMap := scopesFormat(r.Form.Get("scopes"))
+	scopesMap := scopesFormat(formScope(r))
 	if scopesMap != nil {
 		existingScopes := strings.Split(at.Scopes, " ")
 		for _, scope := range scopesMap {

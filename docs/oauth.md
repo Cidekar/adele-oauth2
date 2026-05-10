@@ -166,7 +166,7 @@ Machine-to-machine — one backend service calling another. No user, no browser,
         │  POST /oauth/token                          │
         │  grant_type=client_credentials              │
         │  client_id + client_secret                  │
-        │  scopes=...                                 │
+        │  scope=...                                  │
         │  (or HTTP Basic Auth header)                │
         ├────────────────────────────────────────────►│
         │                                             │ bcrypt-verify secret,
@@ -200,7 +200,7 @@ Trusted first-party clients only. The user hands their username and password to 
   │                   │  grant_type=password       │
   │                   │  client_id + client_secret │
   │                   │  username + password       │
-  │                   │  scopes=...                │
+  │                   │  scope=...                 │
   │                   ├───────────────────────────►│
   │                   │                            │ verify client secret,
   │                   │                            │ verify user password,
@@ -227,7 +227,7 @@ Applies to Authorization Code (plain + pkce) and Password. Client Credentials an
     │  POST /oauth/token/refresh                     │
     │  grant_type=refresh_token                      │
     │  client_id + client_secret + refresh_token     │
-    │  scopes=...  (must be subset of original)      │
+    │  scope=...  (must be subset of original)       │
     ├───────────────────────────────────────────────►│
     │                                                │ verify refresh token
     │                                                │ (SHA-256 lookup)
@@ -427,13 +427,15 @@ The provider auto-registers these endpoints. No manual route definition is requi
 
 Exchanges credentials for an access token. Supports `client_credentials`, `password`, and `authorization_code` (PKCE code exchange) grant types.
 
+> **Note:** RFC 6749 specifies `scope` (singular). For backward compatibility, this package also accepts `scopes` (plural), but `scope` is preferred.
+
 **Client credentials grant:**
 
 ```
 POST /oauth/token
 Content-Type: application/x-www-form-urlencoded
 
-grant_type=client_credentials&client_id=1&client_secret=secret&scopes=ping+pong
+grant_type=client_credentials&client_id=1&client_secret=secret&scope=ping+pong
 ```
 
 **Password grant:**
@@ -442,7 +444,7 @@ grant_type=client_credentials&client_id=1&client_secret=secret&scopes=ping+pong
 POST /oauth/token
 Content-Type: application/x-www-form-urlencoded
 
-grant_type=password&client_id=1&client_secret=secret&username=user@example.com&password=pass&scopes=ping
+grant_type=password&client_id=1&client_secret=secret&username=user@example.com&password=pass&scope=ping
 ```
 
 **Authorization code PKCE exchange:**
@@ -451,7 +453,7 @@ grant_type=password&client_id=1&client_secret=secret&username=user@example.com&p
 POST /oauth/token
 Content-Type: application/x-www-form-urlencoded
 
-grant_type=authorization_code&client_id=1&code=AUTH_CODE&code_verifier=VERIFIER&code_challenge_method=S256&scopes=ping
+grant_type=authorization_code&client_id=1&code=AUTH_CODE&code_verifier=VERIFIER&code_challenge_method=S256&scope=ping
 ```
 
 **Successful response (RFC 6749 §5.1):**
@@ -487,7 +489,7 @@ Exchanges a valid refresh token for a new access and refresh token pair. The req
 POST /oauth/token/refresh
 Content-Type: application/x-www-form-urlencoded
 
-grant_type=refresh_token&client_id=1&client_secret=secret&refresh_token=REFRESH_TOKEN&scopes=ping
+grant_type=refresh_token&client_id=1&client_secret=secret&refresh_token=REFRESH_TOKEN&scope=ping
 ```
 
 **Successful response:**
