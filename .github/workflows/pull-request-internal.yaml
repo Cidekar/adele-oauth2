@@ -87,6 +87,7 @@ jobs:
           EOF
 
       - name: run tests
+        id: tests
         env:
           GOTOOLCHAIN: auto
         run: |
@@ -94,7 +95,51 @@ jobs:
             echo "::error::Tests require GitHub Actions service containers (Linux only). Re-run this workflow with runner=github-hosted."
             exit 1
           fi
-          go test ./... -count=1 -race
+
+          set +e
+          go test ./... -count=1 -race -json > test-output.json 2> test-stderr.txt
+          TEST_EXIT=$?
+          set -e
+
+          # Build human-readable summary from -json output.
+          PASS_COUNT=$(grep -c '"Action":"pass"' test-output.json | head -1 || echo 0)
+          FAIL_COUNT=$(grep -c '"Action":"fail"' test-output.json | head -1 || echo 0)
+          SKIP_COUNT=$(grep -c '"Action":"skip"' test-output.json | head -1 || echo 0)
+          PKG_COUNT=$(grep '"Action":"pass"\|"Action":"fail"' test-output.json | jq -r 'select(.Test == null) | .Package' 2>/dev/null | sort -u | wc -l | tr -d ' ' || echo 0)
+
+          {
+            echo "<!-- BEGIN: test-results -->"
+            echo "### Test Results"
+            echo ""
+            if [ "$TEST_EXIT" -eq 0 ]; then
+              echo "**Status:** PASSED"
+            else
+              echo "**Status:** FAILED"
+            fi
+            echo ""
+            echo "| Metric | Count |"
+            echo "|--------|-------|"
+            echo "| Packages tested | $PKG_COUNT |"
+            echo "| Tests passed | $PASS_COUNT |"
+            echo "| Tests failed | $FAIL_COUNT |"
+            echo "| Tests skipped | $SKIP_COUNT |"
+            echo ""
+            if [ "$TEST_EXIT" -ne 0 ]; then
+              echo "<details><summary>Failed test output</summary>"
+              echo ""
+              echo '```'
+              # Extract failure messages from the JSON stream.
+              jq -r 'select(.Action == "output" and (.Output | test("--- FAIL|FAIL\\s+|panic:"))) | .Output' test-output.json | head -100
+              echo '```'
+              echo ""
+              echo "</details>"
+            fi
+            echo "<!-- END: test-results -->"
+          } > test-results.md
+
+          if [ "$TEST_EXIT" -ne 0 ]; then
+            exit 1
+          fi
 
       - name: extract version from tag
         id: version
@@ -129,6 +174,28 @@ jobs:
           fi
           echo "merge_successful=true" >> $GITHUB_OUTPUT
 
+      - name: build pr body
+        run: |
+          {
+            echo "## Release ${{ steps.version.outputs.VERSION }}"
+            echo ""
+            echo "Automated release PR created from tag \`${{ steps.version.outputs.VERSION }}\`."
+            echo ""
+            cat test-results.md
+            echo ""
+            echo "<!-- BEGIN: security-scan -->"
+            echo "### Security Scan"
+            echo ""
+            echo "_Pending — results will appear here when the security scan completes._"
+            echo "<!-- END: security-scan -->"
+            echo ""
+            echo "### Checklist"
+            echo "- [ ] Security scan passed"
+            echo "- [ ] Build and vet passed"
+            echo "- [ ] Tests passed"
+            echo "- [ ] Ready for release"
+          } > pr-body.md
+
       - name: create pr
         id: create-pr
         env:
@@ -136,14 +203,7 @@ jobs:
         run: |
           PR_URL=$(gh pr create \
             --title "Auto Release PR: ${{ steps.version.outputs.VERSION }}" \
-            --body "## Release ${{ steps.version.outputs.VERSION }}
-
-          Automated release PR created from tag \`${{ steps.version.outputs.VERSION }}\`.
-
-          ### Checklist
-          - [ ] Security scan passed
-          - [ ] Build and vet passed
-          - [ ] Ready for release" \
+            --body-file pr-body.md \
             --head "release/${{ steps.version.outputs.VERSION }}" \
             --base "${{ env.BASE_BRANCH }}" \
             --label "automated,needs-review")

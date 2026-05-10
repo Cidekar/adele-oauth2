@@ -116,6 +116,55 @@ jobs:
             fi
           } > nancy-report.md
 
+      - name: update pr body
+        if: github.event_name == 'pull_request' || github.event_name == 'repository_dispatch'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # Resolve PR number from the appropriate event source.
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            PR_NUMBER="${{ github.event.pull_request.number }}"
+          else
+            PR_NUMBER="${{ github.event.client_payload.pr_number }}"
+          fi
+
+          if [ -z "$PR_NUMBER" ]; then
+            echo "::warning::no PR number resolved; skipping PR body update"
+            exit 0
+          fi
+
+          # Pull the current body.
+          gh pr view "$PR_NUMBER" --json body --jq .body > pr-body-current.md
+
+          # Replace the security-scan block (or append it if no sentinels exist yet).
+          python3 <<'PY'
+          import re, pathlib
+
+          body = pathlib.Path("pr-body-current.md").read_text()
+          report = pathlib.Path("nancy-report.md").read_text().rstrip()
+
+          new_block = (
+              "<!-- BEGIN: security-scan -->\n"
+              + report
+              + "\n<!-- END: security-scan -->"
+          )
+
+          pattern = re.compile(
+              r"<!-- BEGIN: security-scan -->.*?<!-- END: security-scan -->",
+              re.DOTALL,
+          )
+
+          if pattern.search(body):
+              new_body = pattern.sub(new_block, body)
+          else:
+              # No sentinel present; append the block at end.
+              new_body = body.rstrip() + "\n\n" + new_block + "\n"
+
+          pathlib.Path("pr-body-new.md").write_text(new_body)
+          PY
+
+          gh pr edit "$PR_NUMBER" --body-file pr-body-new.md
+
       - name: upload scan report
         uses: actions/upload-artifact@v5
         if: always()
@@ -127,11 +176,21 @@ jobs:
           retention-days: 30
 
       - name: comment on pr
-        if: github.event_name == 'pull_request'
+        if: github.event_name == 'pull_request' || github.event_name == 'repository_dispatch'
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          PR_NUMBER=${{ github.event.pull_request.number }}
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            PR_NUMBER="${{ github.event.pull_request.number }}"
+          else
+            PR_NUMBER="${{ github.event.client_payload.pr_number }}"
+          fi
+
+          if [ -z "$PR_NUMBER" ]; then
+            echo "::warning::no PR number resolved; skipping PR comment"
+            exit 0
+          fi
+
           COMMENT_MARKER="<!-- nancy-security-scan -->"
           BODY="${COMMENT_MARKER}
           $(cat nancy-report.md)"
