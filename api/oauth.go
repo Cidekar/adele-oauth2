@@ -246,19 +246,19 @@ func (o *Service) AuthorizationGrantExchange(w http.ResponseWriter, r *http.Requ
 		"state",
 		"code_challenge",
 		"code_challenge_method",
-		"scopes",
+		formFieldScope,
 	}
 
 	// required
 	for _, field := range requiredFields {
-		if !r.Form.Has(field) {
+		if !hasFormField(r, field) {
 			return nil, NewErrorResponse(ErrInvalidRequest)
 		}
 	}
 
 	// not empty
 	for _, field := range requiredFields {
-		if strings.TrimSpace(r.Form.Get(field)) == "" {
+		if !formFieldNonEmpty(r, field) {
 			return nil, NewErrorResponse(ErrInvalidRequest)
 		}
 	}
@@ -382,19 +382,19 @@ func (o *Service) AuthorizationGrantExchangePost(w http.ResponseWriter, r *http.
 		"state",
 		"code_challenge",
 		"code_challenge_method",
-		"scopes",
+		formFieldScope,
 	}
 
 	// required
 	for _, field := range requiredFields {
-		if !r.Form.Has(field) {
+		if !hasFormField(r, field) {
 			return nil, NewErrorResponse(ErrInvalidRequest)
 		}
 	}
 
 	// not empty
 	for _, field := range requiredFields {
-		if strings.TrimSpace(r.Form.Get(field)) == "" {
+		if !formFieldNonEmpty(r, field) {
 			return nil, NewErrorResponse(ErrInvalidRequest)
 		}
 	}
@@ -498,19 +498,19 @@ func (o *Service) AccessTokenGrantExchange(w http.ResponseWriter, r *http.Reques
 			"code_verifier",
 			"code_challenge_method",
 			"grant_type",
-			"scopes",
+			formFieldScope,
 		}
 
 		// required
 		for _, field := range requiredFields {
-			if !r.Form.Has(field) {
+			if !hasFormField(r, field) {
 				return nil, NewErrorResponse(ErrInvalidRequest)
 			}
 		}
 
 		// not empty
 		for _, field := range requiredFields {
-			if strings.TrimSpace(r.Form.Get(field)) == "" {
+			if !formFieldNonEmpty(r, field) {
 				return nil, NewErrorResponse(ErrInvalidRequest)
 			}
 		}
@@ -678,7 +678,7 @@ func (o *Service) AccessTokenGrantExchange(w http.ResponseWriter, r *http.Reques
 	// check the request for all required fields and confirm values are provided for the field.
 	requiredFields := []string{
 		"grant_type",
-		"scopes",
+		formFieldScope,
 	}
 
 	if r.Form.Get("grant_type") == "password" {
@@ -687,14 +687,14 @@ func (o *Service) AccessTokenGrantExchange(w http.ResponseWriter, r *http.Reques
 
 	// required
 	for _, field := range requiredFields {
-		if !r.Form.Has(field) {
+		if !hasFormField(r, field) {
 			return nil, NewErrorResponse(ErrInvalidRequest)
 		}
 	}
 
 	// not empty
 	for _, field := range requiredFields {
-		if strings.TrimSpace(r.Form.Get(field)) == "" {
+		if !formFieldNonEmpty(r, field) {
 			return nil, NewErrorResponse(ErrInvalidRequest)
 		}
 	}
@@ -847,13 +847,13 @@ func (o *Service) RefreshTokenExchange(w http.ResponseWriter, r *http.Request) (
 	// Per RFC 6749 require client authentication for confidential clients or for any client that was issued client credentials
 	requiredFields := []string{
 		"grant_type",
-		"scopes",
+		formFieldScope,
 		"refresh_token",
 	}
 
 	// required
 	for _, field := range requiredFields {
-		if !r.Form.Has(field) {
+		if !hasFormField(r, field) {
 			return nil, NewErrorResponse(ErrInvalidRequest)
 		}
 	}
