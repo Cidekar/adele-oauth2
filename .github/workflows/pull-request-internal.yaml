@@ -70,9 +70,59 @@ jobs:
         run: go mod download
 
       - name: build and vet
+        id: build
         run: |
-          go build ./...
-          go vet ./...
+          set +e
+          {
+            echo "## go build ./..."
+            go build ./... 2>&1
+            BUILD_EXIT=$?
+            echo "build_exit=$BUILD_EXIT"
+            echo ""
+            echo "## go vet ./..."
+            go vet ./... 2>&1
+            VET_EXIT=$?
+            echo "vet_exit=$VET_EXIT"
+          } > build-output.txt 2>&1
+          set -e
+
+          BUILD_EXIT=$(grep -E '^build_exit=' build-output.txt | tail -1 | cut -d= -f2)
+          VET_EXIT=$(grep -E '^vet_exit=' build-output.txt | tail -1 | cut -d= -f2)
+          BUILD_EXIT=${BUILD_EXIT:-0}
+          VET_EXIT=${VET_EXIT:-0}
+
+          if [ "$BUILD_EXIT" -eq 0 ] && [ "$VET_EXIT" -eq 0 ]; then
+            STATUS="PASSED"
+          else
+            STATUS="FAILED"
+          fi
+
+          {
+            echo "<!-- BEGIN: build-vet -->"
+            echo "### Build & Vet"
+            echo ""
+            echo "**Status:** $STATUS"
+            echo ""
+            echo "| Step | Exit |"
+            echo "|------|------|"
+            echo "| go build ./... | $BUILD_EXIT |"
+            echo "| go vet ./... | $VET_EXIT |"
+            if [ "$STATUS" = "FAILED" ]; then
+              echo ""
+              echo "<details><summary>Build/vet output</summary>"
+              echo ""
+              echo '```'
+              cat build-output.txt
+              echo '```'
+              echo ""
+              echo "</details>"
+            fi
+            echo "<!-- END: build-vet -->"
+          } > build-results.md
+
+          if [ "$STATUS" = "FAILED" ]; then
+            exit 1
+          fi
 
       - name: write test.env
         run: |
@@ -180,6 +230,8 @@ jobs:
             echo "## Release ${{ steps.version.outputs.VERSION }}"
             echo ""
             echo "Automated release PR created from tag \`${{ steps.version.outputs.VERSION }}\`."
+            echo ""
+            cat build-results.md
             echo ""
             cat test-results.md
             echo ""
