@@ -46,20 +46,19 @@ func BearerTokenHandler(unguardedRoute []string, GuardedRouteGroups []string, Er
 			}
 
 			ok, token, err := o.AuthenticateToken(r)
-			if err != nil {
-				err := writeJSON(w, StatusCodes[ErrInvalidClient], Descriptions[ErrInvalidClient])
-				if err != nil {
-					ErrorLogger.Println(err)
+			if err != nil || !ok {
+				// Browser-friendly UX path: an UNAUTHENTICATED non-JSON caller
+				// (e.g. a user navigating to a guarded URL in a browser) is
+				// redirected to the site root instead of receiving a raw JSON
+				// 401 payload. JSON callers (Accept: application/json) get the
+				// standard ErrInvalidClient envelope. Authenticated requests
+				// fall through to context stamping below regardless of Accept.
+				if r.Header.Get("Accept") != "application/json" {
+					http.Redirect(w, r, "/", http.StatusSeeOther)
 					return
 				}
-				return
-			}
-
-			if !ok {
-				err := writeJSON(w, StatusCodes[ErrInvalidClient], Descriptions[ErrInvalidClient])
-				if err != nil {
-					ErrorLogger.Println(err)
-					return
+				if writeErr := writeJSON(w, StatusCodes[ErrInvalidClient], Descriptions[ErrInvalidClient]); writeErr != nil {
+					ErrorLogger.Println(writeErr)
 				}
 				return
 			}
@@ -70,6 +69,15 @@ func BearerTokenHandler(unguardedRoute []string, GuardedRouteGroups []string, Er
 				ctx = context.WithValue(ctx, ContextKeyClientName, client.Name)
 			}
 			ctx = context.WithValue(ctx, ContextKeyAccessToken, token.PlainText)
+			// Backward-compat: the legacy bare-string key "accessToken" is
+			// stamped alongside the typed ContextKeyAccessToken for one major
+			// release. ScopeHandler (this package) and external consumers
+			// historically read r.Context().Value("accessToken").(string);
+			// removing the legacy stamping silently breaks every caller that
+			// has not yet migrated. The typed ContextKeyAccessToken is the
+			// canonical reader path and should be preferred for new code.
+			// Remove this line one major release after all known consumers
+			// have migrated to the typed key.
 			ctx = context.WithValue(ctx, "accessToken", token.PlainText)
 			next.ServeHTTP(w, r.WithContext(ctx))
 		}

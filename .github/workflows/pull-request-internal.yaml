@@ -28,6 +28,23 @@ on:
 jobs:
   release:
     runs-on: ${{ github.event.inputs.runner == 'self-hosted' && fromJSON('["self-hosted", "macOS", "ARM64", "cidekar", "macos-arm64"]') || 'ubuntu-latest' }}
+    # NOTE: GitHub Actions service containers only run on Linux runners. On the
+    # self-hosted macOS runner this block is ignored and the test step below is
+    # skipped via its `if:` guard.
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: password
+          POSTGRES_DB: test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
     steps:
       - name: install github cli
         if: runner.os == 'macOS'
@@ -53,9 +70,126 @@ jobs:
         run: go mod download
 
       - name: build and vet
+        id: build
         run: |
-          go build ./...
-          go vet ./...
+          set +e
+          {
+            echo "## go build ./..."
+            go build ./... 2>&1
+            BUILD_EXIT=$?
+            echo "build_exit=$BUILD_EXIT"
+            echo ""
+            echo "## go vet ./..."
+            go vet ./... 2>&1
+            VET_EXIT=$?
+            echo "vet_exit=$VET_EXIT"
+          } > build-output.txt 2>&1
+          set -e
+
+          BUILD_EXIT=$(grep -E '^build_exit=' build-output.txt | tail -1 | cut -d= -f2)
+          VET_EXIT=$(grep -E '^vet_exit=' build-output.txt | tail -1 | cut -d= -f2)
+          BUILD_EXIT=${BUILD_EXIT:-0}
+          VET_EXIT=${VET_EXIT:-0}
+
+          if [ "$BUILD_EXIT" -eq 0 ] && [ "$VET_EXIT" -eq 0 ]; then
+            STATUS="PASSED"
+          else
+            STATUS="FAILED"
+          fi
+
+          {
+            echo "<!-- BEGIN: build-vet -->"
+            echo "### Build & Vet"
+            echo ""
+            echo "**Status:** $STATUS"
+            echo ""
+            echo "| Step | Exit |"
+            echo "|------|------|"
+            echo "| go build ./... | $BUILD_EXIT |"
+            echo "| go vet ./... | $VET_EXIT |"
+            if [ "$STATUS" = "FAILED" ]; then
+              echo ""
+              echo "<details><summary>Build/vet output</summary>"
+              echo ""
+              echo '```'
+              cat build-output.txt
+              echo '```'
+              echo ""
+              echo "</details>"
+            fi
+            echo "<!-- END: build-vet -->"
+          } > build-results.md
+
+          if [ "$STATUS" = "FAILED" ]; then
+            exit 1
+          fi
+
+      - name: write test.env
+        run: |
+          cat > test.env <<'EOF'
+          DATABASE_TYPE=postgres
+          DATABASE_HOST=localhost
+          DATABASE_PORT=5432
+          DATABASE_USER=postgres
+          DATABASE_PASSWORD=password
+          DATABASE_NAME=test
+          DATABASE_SSL_MODE=disable
+          EOF
+
+      - name: run tests
+        id: tests
+        env:
+          GOTOOLCHAIN: auto
+        run: |
+          if [ "$RUNNER_OS" != "Linux" ]; then
+            echo "::error::Tests require GitHub Actions service containers (Linux only). Re-run this workflow with runner=github-hosted."
+            exit 1
+          fi
+
+          set +e
+          go test ./... -count=1 -race -json > test-output.json 2> test-stderr.txt
+          TEST_EXIT=$?
+          set -e
+
+          # Build human-readable summary from -json output.
+          PASS_COUNT=$(grep -c '"Action":"pass"' test-output.json | head -1 || echo 0)
+          FAIL_COUNT=$(grep -c '"Action":"fail"' test-output.json | head -1 || echo 0)
+          SKIP_COUNT=$(grep -c '"Action":"skip"' test-output.json | head -1 || echo 0)
+          PKG_COUNT=$(grep '"Action":"pass"\|"Action":"fail"' test-output.json | jq -r 'select(.Test == null) | .Package' 2>/dev/null | sort -u | wc -l | tr -d ' ' || echo 0)
+
+          {
+            echo "<!-- BEGIN: test-results -->"
+            echo "### Test Results"
+            echo ""
+            if [ "$TEST_EXIT" -eq 0 ]; then
+              echo "**Status:** PASSED"
+            else
+              echo "**Status:** FAILED"
+            fi
+            echo ""
+            echo "| Metric | Count |"
+            echo "|--------|-------|"
+            echo "| Packages tested | $PKG_COUNT |"
+            echo "| Tests passed | $PASS_COUNT |"
+            echo "| Tests failed | $FAIL_COUNT |"
+            echo "| Tests skipped | $SKIP_COUNT |"
+            echo ""
+            if [ "$TEST_EXIT" -ne 0 ]; then
+              echo "<details><summary>Failed test output</summary>"
+              echo ""
+              echo '```'
+              # Extract failure messages from the JSON stream.
+              jq -r 'select(.Action == "output" and (.Output | test("--- FAIL|FAIL\\s+|panic:"))) | .Output' test-output.json | head -100
+              echo '```'
+              echo ""
+              echo "</details>"
+            fi
+            echo "<!-- END: test-results -->"
+          } > test-results.md
+
+          if [ "$TEST_EXIT" -ne 0 ]; then
+            exit 1
+          fi
 
       - name: extract version from tag
         id: version
@@ -90,6 +224,30 @@ jobs:
           fi
           echo "merge_successful=true" >> $GITHUB_OUTPUT
 
+      - name: build pr body
+        run: |
+          {
+            echo "## Release ${{ steps.version.outputs.VERSION }}"
+            echo ""
+            echo "Automated release PR created from tag \`${{ steps.version.outputs.VERSION }}\`."
+            echo ""
+            cat build-results.md
+            echo ""
+            cat test-results.md
+            echo ""
+            echo "<!-- BEGIN: security-scan -->"
+            echo "### Security Scan"
+            echo ""
+            echo "_Pending — results will appear here when the security scan completes._"
+            echo "<!-- END: security-scan -->"
+            echo ""
+            echo "### Checklist"
+            echo "- [ ] Security scan passed"
+            echo "- [ ] Build and vet passed"
+            echo "- [ ] Tests passed"
+            echo "- [ ] Ready for release"
+          } > pr-body.md
+
       - name: create pr
         id: create-pr
         env:
@@ -97,14 +255,7 @@ jobs:
         run: |
           PR_URL=$(gh pr create \
             --title "Auto Release PR: ${{ steps.version.outputs.VERSION }}" \
-            --body "## Release ${{ steps.version.outputs.VERSION }}
-
-          Automated release PR created from tag \`${{ steps.version.outputs.VERSION }}\`.
-
-          ### Checklist
-          - [ ] Security scan passed
-          - [ ] Build and vet passed
-          - [ ] Ready for release" \
+            --body-file pr-body.md \
             --head "release/${{ steps.version.outputs.VERSION }}" \
             --base "${{ env.BASE_BRANCH }}" \
             --label "automated,needs-review")

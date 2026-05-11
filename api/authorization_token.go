@@ -12,6 +12,7 @@ import (
 	"time"
 
 	up "github.com/upper/db/v4"
+	postgresql "github.com/upper/db/v4/adapter/postgresql"
 )
 
 // Create a new authorization token
@@ -40,7 +41,9 @@ func (o *Service) GetAuthorizationTokenByToken(plainText string) (*Authorization
 
 	var token AuthorizationToken
 	hash := sha256.Sum256([]byte(plainText))
-	res := collection.Find(up.Cond{"token_hash": hash[:]})
+	// See note in oauth_token.go GetByToken: wrap []byte with postgresql.Bytea
+	// to avoid SQLSTATE 22021 from upper/db's []byte->string conversion.
+	res := collection.Find(up.Cond{"token_hash": postgresql.Bytea(hash[:])})
 	err := res.One(&token)
 	if err != nil {
 		return nil, err
@@ -94,7 +97,9 @@ func (o *Service) ConsumeAuthorizationToken(plainText string) (*AuthorizationTok
 
 	err := DB.Tx(func(sess up.Session) error {
 		col := sess.Collection("authorization_tokens")
-		res := col.Find(up.Cond{"token_hash": hash[:]})
+		// See note in oauth_token.go GetByToken: wrap []byte with postgresql.Bytea
+		// to avoid SQLSTATE 22021 from upper/db's []byte->string conversion.
+		res := col.Find(up.Cond{"token_hash": postgresql.Bytea(hash[:])})
 
 		if err := res.One(&token); err != nil {
 			return err
